@@ -1,0 +1,2218 @@
+import { useState, useRef, useEffect, useCallback, useMemo, memo, createContext, useContext } from "react";
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BRAND & CONSTANTS  (Fix #19: font set once at root, not repeated inline)
+// ═══════════════════════════════════════════════════════════════════════════════
+const FONT = "'Nunito', sans-serif";
+
+const B = {
+  navy:"#1A2154", pink:"#E8407A", orange:"#F5A623",
+  grad:"linear-gradient(135deg,#E8407A 0%,#F5A623 100%)",
+  gradB:"linear-gradient(135deg,#1A2154 0%,#2D3A8C 100%)",
+  gradG:"linear-gradient(135deg,#00C853 0%,#00897B 100%)",
+  white:"#FFFFFF", offWhite:"#F8F9FB", light:"#F2F3F7",
+  border:"#EAEBF2",
+  textDark:"#1A2154", textMid:"#555770", textGray:"#8A8FA8", midGray:"#C4C8D8",
+  green:"#00C853", red:"#FF3B30", blue:"#2979FF", purple:"#7C4DFF",
+  teal:"#00897B", gold:"#FFB300", silver:"#9E9E9E", bronze:"#A1682A",
+  shadow:"0 2px 16px rgba(26,33,84,0.08)",
+  shadowMd:"0 6px 32px rgba(26,33,84,0.14)",
+  shadowHeavy:"0 12px 48px rgba(26,33,84,0.22)",
+};
+
+// Fix #1: NOTIFS_DATA moved outside component — never recreated on render
+const INITIAL_NOTIFS = [
+  { id:"n1", icon:"👍", title:"5,638 votes on your poll!", body:"'Skinny or mom jeans' is trending", time:"2m ago", unread:true,  type:"vote"      },
+  { id:"n2", icon:"❤️", title:"H&M reacted to your post",  body:"",                                  time:"15m ago",unread:true,  type:"reaction"  },
+  { id:"n3", icon:"🔥", title:"Your poll is on fire!",      body:"Top 1% engagement today",           time:"1h ago", unread:true,  type:"trending"  },
+  { id:"n4", icon:"💬", title:"New comment from @LOrealParis", body:'"Love this question!"',           time:"2h ago", unread:false, type:"comment"   },
+  { id:"n5", icon:"👋", title:"@Fashionista followed you",  body:"",                                  time:"5h ago", unread:false, type:"follow"    },
+  { id:"n6", icon:"🎉", title:"10,000 total votes milestone!", body:"You're in the top 5% of creators", time:"1d ago",unread:false, type:"milestone" },
+];
+
+const uid  = () => Math.random().toString(36).slice(2,9);
+const fmt  = n => n>=1000000?`${(n/1e6).toFixed(1)}M`:n>=1000?`${(n/1000).toFixed(1)}k`:String(n);
+const pad  = n => String(n).padStart(2,"0");
+const grad = (a,b) => `linear-gradient(135deg,${a} 0%,${b} 100%)`;
+const pct  = (a,b) => b>0?Math.round((a/b)*100):0;
+
+// ─── XP / Level system ───────────────────────────────────────────────────────
+const LEVELS = [
+  { min:0,    max:99,       label:"Newcomer",     icon:"🌱", color:"#9E9E9E" },
+  { min:100,  max:299,      label:"Voter",        icon:"🗳️", color:B.blue    },
+  { min:300,  max:699,      label:"Trendsetter",  icon:"⚡", color:B.purple  },
+  { min:700,  max:1499,     label:"Influencer",   icon:"🔥", color:B.orange  },
+  { min:1500, max:2999,     label:"Authority",    icon:"💎", color:B.teal    },
+  { min:3000, max:Infinity, label:"Quikix Legend",icon:"👑", color:"#FFB300" },
+];
+const getLevel  = xp => LEVELS.find(l=>xp>=l.min&&xp<=l.max)||LEVELS[0];
+const getXP     = ()  => { try { return parseInt(localStorage.getItem("qx_xp")||"0",10); } catch { return 0; } };
+const saveXP    = n   => { try { localStorage.setItem("qx_xp",String(n)); } catch {} };
+
+// ─── All 8 poll types ────────────────────────────────────────────────────────
+const POLL_TYPES = [
+  { id:"ab",      icon:"⚖️",  label:"A vs B",        desc:"Side-by-side image vote"      },
+  { id:"yesno",   icon:"👍",  label:"Yes / No",       desc:"Simple thumbs up or down"      },
+  { id:"text",    icon:"💬",  label:"Text Poll",      desc:"Bold coloured background"      },
+  { id:"multi",   icon:"📋",  label:"Multiple Choice",desc:"Up to 6 options"              },
+  { id:"ranked",  icon:"↕️",  label:"Ranked Choice",  desc:"Tap arrows to rank options"    },
+  { id:"slider",  icon:"🎚️",  label:"Slider Scale",   desc:"Rate on a 1–10 scale"         },
+  { id:"image4",  icon:"🖼️",  label:"4-Image Grid",   desc:"Pick from 4 options"          },
+  { id:"video",   icon:"🎬",  label:"Video Poll",     desc:"Upload a short clip to vote"   },
+];
+
+// ─── Gamification data ───────────────────────────────────────────────────────
+const ACHIEVEMENTS = [
+  { id:"first_vote",   icon:"🗳️", title:"First Vote!",      desc:"Cast your first vote",        xp:10,  earned:true  },
+  { id:"poll_5",       icon:"📊", title:"Poll Creator",      desc:"Create 5 polls",              xp:50,  earned:true  },
+  { id:"trending",     icon:"🔥", title:"On Fire!",          desc:"Get a poll trending",         xp:100, earned:true  },
+  { id:"votes_100",    icon:"💯", title:"Century Club",      desc:"Receive 100 votes",           xp:75,  earned:true  },
+  { id:"votes_1000",   icon:"🏆", title:"Thousand Strong",   desc:"Receive 1,000 votes",         xp:200, earned:false },
+  { id:"streak_7",     icon:"📅", title:"Week Warrior",      desc:"Vote 7 days in a row",        xp:150, earned:false },
+  { id:"share_10",     icon:"📤", title:"Sharing is Caring", desc:"Share 10 polls",              xp:50,  earned:false },
+  { id:"follower_100", icon:"👥", title:"Squad Goals",       desc:"Gain 100 followers",          xp:100, earned:false },
+];
+const LEADERBOARD = [
+  { rank:1, name:"L'Oréal Paris", avatar:"L", color:"#C4A55A", votes:89420, badge:"👑"  },
+  { rank:2, name:"H&M",           avatar:"H", color:"#E50010", votes:72100, badge:"🥈"  },
+  { rank:3, name:"Nike",          avatar:"N", color:"#111111", votes:61300, badge:"🥉"  },
+  { rank:4, name:"Fashionista",   avatar:"F", color:B.purple,  votes:42800, badge:""    },
+  { rank:5, name:"Alex Morgan",   avatar:"A", color:B.pink,    votes:12600, badge:"⭐", isMe:true },
+  { rank:6, name:"BeautyGuru",    avatar:"B", color:B.blue,    votes:9800,  badge:""    },
+  { rank:7, name:"StyleIcon",     avatar:"S", color:B.teal,    votes:7600,  badge:""    },
+];
+
+// Fix #4: localStorage persistence for first-open flag
+const getFirstOpen = () => { try { return localStorage.getItem("qx_first_open") !== "done"; } catch { return true; } };
+const markFirstOpen = () => { try { localStorage.setItem("qx_first_open","done"); } catch {} };
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONTEXTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Fix #21: Tick context so only Countdown re-renders each second, not parents
+const TickCtx = createContext(0);
+function TickProvider({ children }) {
+  const [tick, setTick] = useState(0);
+  useEffect(() => { const id = setInterval(() => setTick(t=>t+1), 1000); return ()=>clearInterval(id); }, []);
+  return <TickCtx.Provider value={tick}>{children}</TickCtx.Provider>;
+}
+
+// Fix #17: Toast context
+const ToastCtx = createContext(null);
+function ToastProvider({ children }) {
+  const [toasts, setToasts] = useState([]);
+  const show = useCallback((msg, type="success") => {
+    const id = uid();
+    setToasts(ts=>[...ts,{id,msg,type}]);
+    setTimeout(()=>setToasts(ts=>ts.filter(t=>t.id!==id)), 2800);
+  },[]);
+  return (
+    <ToastCtx.Provider value={show}>
+      {children}
+      <div style={{ position:"fixed",bottom:96,left:"50%",transform:"translateX(-50%)",zIndex:9999,display:"flex",flexDirection:"column",gap:8,alignItems:"center",pointerEvents:"none",width:"100%",maxWidth:400,padding:"0 20px" }}>
+        {toasts.map(t=>(
+          <div key={t.id} style={{ background:t.type==="xp"?B.gradG:t.type==="error"?B.red:B.navy,color:"#fff",padding:"11px 22px",borderRadius:50,fontFamily:FONT,fontWeight:700,fontSize:14,boxShadow:B.shadowMd,animation:"toastIn .25s ease",whiteSpace:"nowrap" }}>
+            {t.type==="xp"?"⭐ ":t.type==="success"?"✓ ":t.type==="error"?"✕ ":"ℹ "}{t.msg}
+          </div>
+        ))}
+      </div>
+    </ToastCtx.Provider>
+  );
+}
+const useToast = () => useContext(ToastCtx);
+
+// ─── XP Context ───────────────────────────────────────────────────────────────
+const XPCtx = createContext(null);
+function XPProvider({ children }) {
+  const [xp, setXp]     = useState(getXP);
+  const [burst, setBurst] = useState(null);
+  const toast = useContext(ToastCtx);
+  const earn = useCallback((amount, reason) => {
+    setXp(prev => { const next=prev+amount; saveXP(next); return next; });
+    setBurst(reason);
+    setTimeout(()=>setBurst(null), 1600);
+    if(toast) toast(`+${amount} XP — ${reason}`, "xp");
+  }, [toast]);
+  const level = useMemo(()=>getLevel(xp),[xp]);
+  return (
+    <XPCtx.Provider value={{ xp, earn, level }}>
+      {children}
+      {burst&&(
+        <div style={{ position:"fixed",top:"18%",left:"50%",transform:"translateX(-50%)",zIndex:9998,background:B.gradG,color:"#fff",padding:"12px 28px",borderRadius:50,fontFamily:FONT,fontWeight:900,fontSize:15,boxShadow:B.shadowHeavy,animation:"xpBurst .5s ease",pointerEvents:"none",whiteSpace:"nowrap" }}>
+          ⭐ {burst}
+        </div>
+      )}
+    </XPCtx.Provider>
+  );
+}
+const useXP = () => useContext(XPCtx);
+
+// Fix #28: Dark mode context
+const ThemeCtx = createContext("light");
+function ThemeProvider({ children }) {
+  const [mode, setMode] = useState(() => {
+    try { return localStorage.getItem("qx_theme") || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"); }
+    catch { return "light"; }
+  });
+  const toggle = () => setMode(m => { const n = m==="dark"?"light":"dark"; try{localStorage.setItem("qx_theme",n);}catch{} return n; });
+  const D = mode==="dark" ? {
+    bg:"#0D0F1A", surface:"#161825", card:"#1E2035", border:"#2A2D45",
+    text:"#F0F2FF", textMid:"#A0A3C0", textGray:"#6B6E88",
+  } : {
+    bg:B.offWhite, surface:B.white, card:B.white, border:B.border,
+    text:B.navy, textMid:B.textMid, textGray:B.textGray,
+  };
+  return <ThemeCtx.Provider value={{ mode, toggle, D }}>{children}</ThemeCtx.Provider>;
+}
+const useTheme = () => useContext(ThemeCtx);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// REACTION LIST  (string keys, not emoji literals)
+// ═══════════════════════════════════════════════════════════════════════════════
+const REACTIONS = [
+  { key:"heart", emoji:"❤️", label:"Love"  },
+  { key:"fire",  emoji:"🔥", label:"Hot"   },
+  { key:"haha",  emoji:"😂", label:"Haha"  },
+  { key:"wow",   emoji:"😮", label:"Wow"   },
+  { key:"clap",  emoji:"👏", label:"Clap"  },
+];
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SVG ICON SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════════
+const Ic = {
+  Home:    ()=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>,
+  Search:  ()=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>,
+  Chart:   ()=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>,
+  Bell:    ()=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>,
+  User:    ()=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>,
+  Msg:     ()=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>,
+  Share:   ()=><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>,
+  Comment: ()=><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>,
+  Eye:     ()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>,
+  Send:    ()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>,
+  Boost:   ()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>,
+  BookmarkFill:()=><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg>,
+  Bell2:   ()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>,
+  Sun:     ()=><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>,
+  Moon:    ()=><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>,
+  Close:   ()=><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
+  Trophy:  ()=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-1a2 2 0 012-2h16a2 2 0 012 2v1a2 2 0 01-2 2h-2"/><rect x="6" y="18" width="12" height="4"/><path d="M6 9a6 6 0 0012 0"/></svg>,
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// LOGO (unique gradient IDs per instance)
+// ═══════════════════════════════════════════════════════════════════════════════
+let _lid = 0;
+function Logo({ size=32, white=false, iconOnly=false }) {
+  const gid = useRef(`lg-${++_lid}`).current;
+  const c1 = white?"#fff":B.pink, c2 = white?"#fff":B.orange, tc = white?"#fff":B.navy;
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:7 }}>
+      <svg width={size} height={size} viewBox="0 0 100 100" fill="none" aria-hidden="true">
+        <defs><linearGradient id={gid} x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stopColor={c1}/><stop offset="100%" stopColor={c2}/></linearGradient></defs>
+        <circle cx="44" cy="40" r="28" stroke={`url(#${gid})`} strokeWidth="10" fill="none"/>
+        <path d="M28 60 L50 80 L78 44" stroke={`url(#${gid})`} strokeWidth="10" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+      </svg>
+      {!iconOnly && <span style={{ fontFamily:FONT, fontWeight:900, fontSize:size*0.78, color:tc, letterSpacing:-0.5, lineHeight:1 }}>Quiki<span style={{ color:white?"#fff":B.pink }}>x</span></span>}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// COUNTDOWN  (Fix #21: reads from context, doesn't create interval)
+// ═══════════════════════════════════════════════════════════════════════════════
+function Countdown({ endsAt }) {
+  const tick = useContext(TickCtx);
+  const { D } = useTheme();
+  const t = useMemo(() => {
+    const d = Math.max(0, endsAt - Date.now());
+    return { d:Math.floor(d/86400000), h:Math.floor((d%86400000)/3600000), m:Math.floor((d%3600000)/60000), s:Math.floor((d%60000)/1000) };
+  }, [tick, endsAt]);
+  const live = endsAt > Date.now();
+  if (!live) return <span style={{ fontFamily:FONT, fontSize:11, fontWeight:800, color:D.textMid, background:D.border, padding:"3px 8px", borderRadius:50 }}>CLOSED</span>;
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:5 }} aria-label={`Closes in ${pad(t.d)}:${pad(t.h)}:${pad(t.m)}:${pad(t.s)}`}>
+      <span style={{ fontFamily:FONT, fontWeight:700, fontSize:12, color:t.h<1&&t.d<1?B.red:D.text, letterSpacing:0.5, fontVariantNumeric:"tabular-nums" }}>{pad(t.d)}:{pad(t.h)}:{pad(t.m)}:{pad(t.s)}</span>
+      <div style={{ width:13, height:13, borderRadius:"50%", border:`2px solid ${B.green}`, display:"flex", alignItems:"center", justifyContent:"center" }} aria-hidden="true">
+        <div style={{ width:5, height:5, borderRadius:"50%", background:B.green, animation:"pulseDot 2s infinite" }}/>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SKELETON  (Fix #27: corrected shimmer direction)
+// ═══════════════════════════════════════════════════════════════════════════════
+function Skeleton({ w="100%", h=16, r=8, style={} }) {
+  return <div style={{ width:w, height:h, borderRadius:r, background:"linear-gradient(90deg,#ECEDF2 0%,#F5F6FA 50%,#ECEDF2 100%)", backgroundSize:"400% 100%", animation:"shimmer 1.5s ease-in-out infinite", flexShrink:0, ...style }}/>;
+}
+function PostSkeleton() {
+  return (
+    <div style={{ background:B.white, borderBottom:`8px solid ${B.offWhite}`, padding:"14px 16px" }} aria-hidden="true">
+      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
+        <Skeleton w={44} h={44} r={22}/><div style={{ flex:1 }}><Skeleton w="60%" h={14} r={6} style={{ marginBottom:6 }}/><Skeleton w="40%" h={11} r={5}/></div>
+      </div>
+      <Skeleton w="80%" h={18} r={6} style={{ marginBottom:10 }}/>
+      <Skeleton w="100%" h={260} r={0}/>
+      <div style={{ padding:"10px 0" }}><Skeleton w="70%" h={12} r={5} style={{ marginBottom:8 }}/><Skeleton w="50%" h={12} r={5}/></div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// REACTION BAR  (Fix #5: correct key mapping)
+// ═══════════════════════════════════════════════════════════════════════════════
+const ReactionBar = memo(function ReactionBar({ postId, initial={} }) {
+  const { D } = useTheme();
+  const initCounts = useMemo(() => {
+    const base = { heart:0, fire:0, haha:0, wow:0, clap:0 };
+    // Fix #5: map by r.key not r.emoji
+    REACTIONS.forEach(r => { if (initial[r.key]) base[r.key] = initial[r.key]; });
+    return base;
+  }, []);
+  const [counts, setCounts] = useState(initCounts);
+  const [mine, setMine] = useState(null);
+  const [burst, setBurst] = useState(null);
+
+  const tap = useCallback((key) => {
+    // Fix #7: haptic feedback
+    try { navigator.vibrate && navigator.vibrate(8); } catch {}
+    if (mine === key) { setCounts(c=>({...c,[key]:Math.max(0,c[key]-1)})); setMine(null); return; }
+    if (mine) setCounts(c=>({...c,[mine]:Math.max(0,c[mine]-1)}));
+    setCounts(c=>({...c,[key]:c[key]+1}));
+    setMine(key); setBurst(key);
+    setTimeout(()=>setBurst(null), 600);
+  }, [mine]);
+
+  return (
+    <div style={{ display:"flex", gap:5, alignItems:"center" }} role="group" aria-label="Reactions">
+      {REACTIONS.map(r => {
+        const active = mine===r.key, n = counts[r.key];
+        return (
+          <button key={r.key} onClick={()=>tap(r.key)} aria-label={`${r.label}${n>0?`, ${n}`:""}`} aria-pressed={active}
+            style={{ display:"flex", alignItems:"center", gap:3, padding:"5px 8px", borderRadius:50, border:`1.5px solid ${active?B.pink:D.border}`, background:active?`${B.pink}18`:D.surface, cursor:"pointer", transform:burst===r.key?"scale(1.4)":"scale(1)", transition:"all .18s cubic-bezier(.34,1.56,.64,1)" }}>
+            <span style={{ fontSize:14, lineHeight:1 }} aria-hidden="true">{r.emoji}</span>
+            {n>0 && <span style={{ fontFamily:FONT, fontSize:11, fontWeight:800, color:active?B.pink:D.textMid }}>{n}</span>}
+          </button>
+        );
+      })}
+    </div>
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CHARTS
+// ═══════════════════════════════════════════════════════════════════════════════
+let _sid=0;
+function Sparkline({ data, color=B.pink, height=40 }) {
+  const gid = useRef(`sp-${++_sid}`).current;
+  const { path, fill } = useMemo(() => {
+    const w=200,h=height,mx=Math.max(...data,1),mn=Math.min(...data,0);
+    const pts=data.map((v,i)=>({x:(i/(data.length-1))*w,y:h-((v-mn)/(mx-mn||1))*(h-4)-2}));
+    const p="M"+pts.map(pt=>`${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join("L");
+    return { path:p, fill:`${p}L${w},${h}L0,${h}Z` };
+  }, [data,height]);
+  return (
+    <svg width="100%" height={height} viewBox={`0 0 200 ${height}`} preserveAspectRatio="none" aria-hidden="true">
+      <defs><linearGradient id={gid} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity="0.3"/><stop offset="100%" stopColor={color} stopOpacity="0"/></linearGradient></defs>
+      <path d={fill} fill={`url(#${gid})`}/><path d={path} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+}
+function BarChart({ data, height=80 }) {
+  const max = useMemo(()=>Math.max(...data.map(d=>d.value),1),[data]);
+  const { D } = useTheme();
+  return (
+    <div style={{ display:"flex", alignItems:"flex-end", gap:5, height }} role="img" aria-label={data.map(d=>`${d.label}: ${d.value}`).join(", ")}>
+      {data.map((d,i)=>{
+        const pk=d.value===max;
+        return (
+          <div key={i} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:4 }}>
+            <div style={{ width:"100%", height:Math.max(4,(d.value/max)*(height-20)), background:pk?B.grad:`${B.pink}30`, borderRadius:"5px 5px 0 0", transition:"height .5s ease", position:"relative" }}>
+              {pk && <div style={{ position:"absolute", top:-17, left:"50%", transform:"translateX(-50%)", fontFamily:FONT, fontSize:8, fontWeight:900, color:B.pink, whiteSpace:"nowrap" }}>PEAK</div>}
+            </div>
+            <span style={{ fontFamily:FONT, fontSize:9, color:D.textMid, fontWeight:600 }}>{d.label}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+function DonutChart({ data, size=120 }) {
+  const r=42,cx=60,cy=60,circ=2*Math.PI*r,total=data.reduce((a,d)=>a+d.value,0);
+  let offset=0;
+  return (
+    <div style={{ position:"relative", width:size, height:size }} role="img" aria-label={data.map(d=>`${d.label} ${d.value}%`).join(", ")}>
+      <svg width={size} height={size} viewBox="0 0 120 120" aria-hidden="true">
+        {data.map((d,i)=>{const dash=(d.value/total)*circ;const el=<circle key={i} cx={cx} cy={cy} r={r} fill="none" stroke={d.color} strokeWidth="16" strokeDasharray={`${dash} ${circ-dash}`} strokeDashoffset={-offset} transform="rotate(-90 60 60)"/>;offset+=dash;return el;})}
+        <circle cx={cx} cy={cy} r={34} fill="white"/>
+      </svg>
+      <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center" }}>
+        <span style={{ fontFamily:FONT, fontWeight:900, fontSize:20, color:B.navy }}>{data[0]?.value}%</span>
+        <span style={{ fontFamily:FONT, fontSize:9, color:B.textMid, fontWeight:700 }}>{data[0]?.label}</span>
+      </div>
+    </div>
+  );
+}
+let _rid=0;
+function ScoreRing({ score, label, size=110 }) {
+  const gid=useRef(`sr-${++_rid}`).current;
+  const r=44,circ=2*Math.PI*r,dash=(score/100)*circ;
+  return (
+    <div style={{ position:"relative", width:size, height:size }} role="img" aria-label={`Score ${score}/100 ${label}`}>
+      <svg width={size} height={size} viewBox="0 0 110 110" aria-hidden="true">
+        <circle cx="55" cy="55" r={r} fill="none" stroke={B.light} strokeWidth="10"/>
+        <defs><linearGradient id={gid} x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stopColor={B.pink}/><stop offset="100%" stopColor={B.orange}/></linearGradient></defs>
+        <circle cx="55" cy="55" r={r} fill="none" stroke={`url(#${gid})`} strokeWidth="10" strokeDasharray={`${dash} ${circ-dash}`} strokeDashoffset={circ*0.25} strokeLinecap="round"/>
+      </svg>
+      <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center" }}>
+        <span style={{ fontFamily:FONT, fontWeight:900, fontSize:24, color:B.navy, lineHeight:1 }}>{score}</span>
+        <span style={{ fontFamily:FONT, fontSize:10, fontWeight:700, color:B.textMid }}>{label}</span>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DEMO DATA
+// ═══════════════════════════════════════════════════════════════════════════════
+const T = h => Date.now()+h*3600000;
+const USERS = {
+  me:     { id:"me",     name:"Alex Morgan",   username:"alexm",       bio:"Fashion lover & survey creator 🌟", location:"New York, NY", accountType:"personal", avatar:"A", brandColor:B.pink,    bannerColor:B.grad,                                  followers:1240,  following:389,  verified:false },
+  hm:     { id:"hm",     name:"H&M",           username:"HM",          bio:"Fashion for all.",                  location:"Global",       accountType:"business", avatar:"H", brandColor:"#E50010", bannerColor:"linear-gradient(135deg,#E50010,#FF6B6B)", followers:284000,following:120,  verified:true  },
+  loreal: { id:"loreal", name:"L'Oréal Paris", username:"LOrealParis", bio:"Because you're worth it.",          location:"Paris, FR",    accountType:"business", avatar:"L", brandColor:"#C4A55A", bannerColor:"linear-gradient(135deg,#C4A55A,#8B6914)", followers:521000,following:89,   verified:true  },
+  fash:   { id:"fash",   name:"Fashionista",   username:"fashionista", bio:"NYC style | Daily inspo",           location:"New York City",accountType:"personal", avatar:"F", brandColor:B.purple,  bannerColor:B.gradB,                                 followers:48200, following:1200, verified:false },
+  nike:   { id:"nike",   name:"Nike",          username:"Nike",         bio:"Just Do It.",                       location:"Portland, OR", accountType:"business", avatar:"N", brandColor:"#111111", bannerColor:"linear-gradient(135deg,#111,#444)",        followers:892000,following:0,   verified:true  },
+};
+const SUGGESTED = [USERS.hm, USERS.loreal, USERS.fash, USERS.nike];
+const INIT_POSTS = [
+  { id:uid(),type:"ab",     authorId:"hm",    question:"Glam or casual for spring?",                         tags:["#fashion","#spring","#hm"],      endsAt:T(9.4), images:["https://images.unsplash.com/photo-1566174053879-31528523f8ae?w=500&q=80","https://images.unsplash.com/photo-1485968579580-b6d095142e6e?w=500&q=80"],             votes:[5638,3162],userVote:null,comments:[{id:uid(),authorId:"me",text:"Love the glam option!",time:"2h ago",likes:12}],reactions:{heart:234,fire:189,haha:12,wow:67,clap:98},   views:24100,shares:892, trending:true  },
+  { id:uid(),type:"multi",  authorId:"fash",  question:"Which style will define 2025?",                      tags:["#style","#fashion","#trends"],   endsAt:T(36),  options:["Quiet Luxury","Y2K Revival","Gorpcore","Coastal Grandmother","Dark Academia","Cottagecore"],votes:[2100,1850,980,740,620,430],userVote:null,comments:[],reactions:{heart:89,fire:134,haha:23,wow:56,clap:67},    views:14200,shares:678, trending:true  },
+  { id:uid(),type:"yesno",  authorId:"loreal",question:"Tried our new Infallible foundation?",               tags:["#loreal","#beauty","#makeup"],   endsAt:T(12),  bg:"#FFF0E8",textColor:"#8B4513",votes:[8241,2103],userVote:null,comments:[{id:uid(),authorId:"me",text:"Obsessed!",time:"1h ago",likes:34}],reactions:{heart:891,fire:445,haha:23,wow:156,clap:234},views:41200,shares:2100,trending:false },
+  { id:uid(),type:"slider", authorId:"nike",  question:"Rate your excitement for Air Max 2025 (1-10)",       tags:["#nike","#sneakers","#airmax"],   endsAt:T(48),  options:[],votes:[0,0,32,58,180,320,890,1240,2100,3800],userVote:null,comments:[{id:uid(),authorId:"hm",text:"Off the charts!",time:"30m ago",likes:89}],reactions:{heart:567,fire:890,haha:12,wow:234,clap:456},views:28400,shares:1890,trending:true  },
+  { id:uid(),type:"ab",     authorId:"me",    question:"Skinny or mom jeans this season?",                   tags:["#jeans","#fashion","#style"],    endsAt:T(24),  images:["https://images.unsplash.com/photo-1541099649105-f69ad21f3246?w=500&q=80","https://images.unsplash.com/photo-1582418702059-97ebafb35d09?w=500&q=80"],             votes:[2638,1962],userVote:null,comments:[],reactions:{heart:45,fire:32,haha:8,wow:15,clap:29},    views:8100, shares:342, trending:false },
+  { id:uid(),type:"ranked", authorId:"loreal",question:"Rank your makeup must-haves:",                        tags:["#makeup","#loreal","#beauty"],   endsAt:T(18),  options:["Foundation","Mascara","Lipstick","Eyeliner","Blush"],votes:[3200,2800,2400,1900,1200],userVote:null,comments:[],reactions:{heart:234,fire:178,haha:45,wow:89,clap:112},views:17600,shares:780, trending:false },
+  { id:uid(),type:"image4", authorId:"hm",    question:"Which bag completes the look?",                       tags:["#bags","#accessories","#hm"],    endsAt:T(6),   images:["https://images.unsplash.com/photo-1548036328-c9fa89d128fa?w=300&q=80","https://images.unsplash.com/photo-1584917865442-de89df76afd3?w=300&q=80","https://images.unsplash.com/photo-1566150905458-1bf1fc113f0d?w=300&q=80","https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=300&q=80"],votes:[1820,1340,980,640],userVote:null,comments:[],reactions:{heart:345,fire:234,haha:12,wow:89,clap:134},views:19400,shares:892, trending:true  },
+  { id:uid(),type:"text",   authorId:"me",    question:"Would you pay more for sustainable fashion?",         tags:["#sustainable","#fashion"],       endsAt:T(48),  bg:"#E8F5E9",textColor:"#1B5E20",votes:[4120,890], userVote:null,comments:[],reactions:{heart:123,fire:89,haha:34,wow:56,clap:145}, views:12800,shares:567, trending:false },
+  { id:uid(),type:"ab",     authorId:"loreal",question:"Day look or night glam?",                             tags:["#makeup","#loreal","#beauty"],   endsAt:T(18),  images:["https://images.unsplash.com/photo-1596704017254-9b121068fb31?w=500&q=80","https://images.unsplash.com/photo-1583241800698-e8ab01830a22?w=500&q=80"],             votes:[6200,4800],userVote:null,comments:[{id:uid(),authorId:"hm",text:"Night glam!",time:"45min ago",likes:67}],reactions:{heart:345,fire:289,haha:56,wow:89,clap:134},views:22600,shares:980, trending:true  },
+  { id:uid(),type:"ab",     authorId:"fash",  question:"Chunky sneakers or sleek mules?",                     tags:["#shoes","#fashion","#style"],    endsAt:T(0.5), images:["https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=500&q=80","https://images.unsplash.com/photo-1618898909019-010e4e234c55?w=500&q=80"],             votes:[3210,2890],userVote:null,comments:[],reactions:{heart:89,fire:67,haha:12,wow:34,clap:45},     views:9400, shares:210, trending:false },
+];
+const ANALYTICS = {
+  overview:{ totalVotes:54617,totalVotesChange:18.4,totalReach:143200,totalReachChange:24.1,engagementRate:7.8,engagementRateChange:1.2,followers:1240,followersChange:342,score:87,scoreLabel:"Excellent",completionRate:84,revenue:2400,revenueChange:31 },
+  votes7d:[1200,1800,950,2100,1650,2800,3100],
+  reach7d:[4200,6100,3800,7200,5900,9100,10400],
+  followers7d:[8,12,6,18,14,24,22],
+  audience:{
+    gender:[{label:"Female",value:62,color:B.pink},{label:"Male",value:34,color:B.blue},{label:"Other",value:4,color:B.purple}],
+    age:[{label:"13–17",value:8,color:"#FF6B6B"},{label:"18–24",value:34,color:B.pink},{label:"25–34",value:31,color:B.orange},{label:"35–44",value:16,color:B.blue},{label:"45+",value:11,color:B.purple}],
+    topLocations:[{city:"New York",country:"US",pct:18},{city:"Los Angeles",country:"US",pct:14},{city:"London",country:"UK",pct:11},{city:"Toronto",country:"CA",pct:8},{city:"Sydney",country:"AU",pct:6}],
+    peakHours:[{label:"6am",value:12},{label:"9am",value:38},{label:"12pm",value:55},{label:"3pm",value:48},{label:"6pm",value:82},{label:"9pm",value:76},{label:"12am",value:28}],
+    peakDays:[{label:"Mon",value:58},{label:"Tue",value:62},{label:"Wed",value:71},{label:"Thu",value:68},{label:"Fri",value:85},{label:"Sat",value:94},{label:"Sun",value:79}],
+  },
+  hashtags:[{tag:"#fashion",votes:18400,growth:"+24%"},{tag:"#beauty",votes:14200,growth:"+18%"},{tag:"#jeans",votes:8800,growth:"+41%"},{tag:"#style",votes:7200,growth:"+12%"},{tag:"#loreal",votes:6100,growth:"+67%"}],
+  insights:[{icon:"🔥",title:"Post Saturday 6–9 PM",body:"82% more engagement Saturday evenings.",color:B.orange},{icon:"📈",title:"#jeans trending +41%",body:"Your jeans poll is outperforming benchmarks.",color:B.green},{icon:"💡",title:"A/B polls get 2.4x more votes",body:"Use image comparisons for max engagement.",color:B.purple},{icon:"🎯",title:"7.8% engagement rate",body:"86% above the industry average of 4.2%.",color:B.navy}],
+  campaigns:[
+    {id:"c1",name:"Spring Collection 2025",status:"active",budget:500, spent:312, votes:14200,reach:48000,ctr:4.2,start:"Mar 1", end:"Mar 31"},
+    {id:"c2",name:"Foundation Launch",     status:"active",budget:800, spent:567, votes:21800,reach:72000,ctr:5.8,start:"Feb 15",end:"Mar 15"},
+    {id:"c3",name:"Summer Preview",        status:"draft", budget:300, spent:0,   votes:0,    reach:0,    ctr:0,  start:"Apr 1", end:"Apr 30"},
+    {id:"c4",name:"Year-End Sale 2024",    status:"closed",budget:1000,spent:1000,votes:38400,reach:98000,ctr:6.1,start:"Dec 1", end:"Dec 31"},
+  ],
+};
+
+// Static UI constants — defined at module level, never recreated on render
+const SEARCH_CATS = ["All","Fashion","Beauty","Food","Tech","Sports","Travel","Business","Health","Entertainment"];
+const INTEREST_ICONS = { Fashion:"👗",Beauty:"💄",Food:"🍕",Tech:"💻",Sports:"⚽",Travel:"✈️",Music:"🎵",Art:"🎨",Business:"💼",Health:"💪",Gaming:"🎮",Movies:"🎬" };
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SPLASH
+// ═══════════════════════════════════════════════════════════════════════════════
+function Splash({ onDone }) {
+  const [p,setP]=useState(0);
+  useEffect(()=>{const ts=[setTimeout(()=>setP(1),500),setTimeout(()=>setP(2),1100),setTimeout(()=>setP(3),1700)];return()=>ts.forEach(clearTimeout);},[]);
+  return (
+    <div style={{ position:"fixed",inset:0,background:B.white,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"space-between",padding:"80px 32px 60px",zIndex:9999 }}>
+      <div style={{ flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:20 }}>
+        <div style={{ opacity:p>=1?1:0,transform:p>=1?"scale(1)":"scale(0.4)",transition:"all 0.7s cubic-bezier(.34,1.56,.64,1)" }}><Logo size={100} iconOnly/></div>
+        <div style={{ opacity:p>=1?1:0,transition:"opacity .6s .2s",textAlign:"center" }}>
+          <h1 style={{ fontFamily:FONT,fontWeight:900,fontSize:54,color:B.navy,letterSpacing:-2,lineHeight:1,margin:0 }}>Quiki<span style={{ color:B.pink }}>x</span></h1>
+          <p style={{ fontFamily:FONT,fontSize:13,color:B.midGray,margin:"4px 0 0",fontStyle:"italic" }}>(quick-ie | kwi-kee)</p>
+        </div>
+        <div style={{ opacity:p>=2?1:0,transform:p>=2?"translateY(0)":"translateY(16px)",transition:"all .5s ease",textAlign:"center",maxWidth:280 }}>
+          <p style={{ fontFamily:FONT,fontWeight:400,fontSize:18,color:B.textMid,lineHeight:1.6,margin:0 }}>The quickest way to hear what <strong style={{ color:B.navy }}>Anyone has to say!</strong></p>
+        </div>
+      </div>
+      <div style={{ width:"100%",display:"flex",flexDirection:"column",gap:14,opacity:p>=3?1:0,transform:p>=3?"translateY(0)":"translateY(28px)",transition:"all .5s ease" }}>
+        <button onClick={()=>onDone("signup")} style={{ width:"100%",padding:"18px 0",borderRadius:50,background:B.grad,border:"none",fontFamily:FONT,fontWeight:900,fontSize:16,color:"#fff",cursor:"pointer",letterSpacing:1,boxShadow:"0 8px 28px rgba(232,64,122,0.4)" }}>CREATE ACCOUNT</button>
+        <button onClick={()=>onDone("login")}  style={{ width:"100%",padding:"16px 0",borderRadius:50,background:"transparent",border:`2px solid ${B.pink}`,fontFamily:FONT,fontWeight:700,fontSize:15,color:B.navy,cursor:"pointer" }}>ALREADY A MEMBER? <span style={{ color:B.pink,fontWeight:900 }}>SIGN IN</span></button>
+        <div style={{ textAlign:"center" }}><button onClick={()=>onDone("guest")} style={{ background:"none",border:"none",fontFamily:FONT,fontSize:13,color:B.textMid,cursor:"pointer",textDecoration:"underline" }}>Continue as Guest →</button></div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ONBOARDING
+// ═══════════════════════════════════════════════════════════════════════════════
+function Onboarding({ type, onDone }) {
+  const [step,setStep]=useState(0);
+  const [form,setForm]=useState({ name:"Alex Morgan",email:"alex@quikix.com",password:"",username:"alexm",accountType:"personal",interests:[],brandColor:B.pink,bio:"Fashion lover & survey creator 🌟" });
+  const upd=k=>v=>setForm(f=>({...f,[k]:v}));
+  const interests=["Fashion","Beauty","Food","Tech","Sports","Travel","Music","Art","Business","Health","Gaming","Movies"];
+  const steps=type==="signup"?["type","info","brand","interests","done"]:["login","done"];
+  const cur=steps[step];
+  const next=()=>{if(step<steps.length-1)setStep(s=>s+1);else onDone(form);};
+  const F=({label,id,value,onChange,placeholder,type="text",multi=false,ac=""})=>(
+    <div style={{ marginBottom:14 }}>
+      <label htmlFor={id} style={{ display:"block",fontFamily:FONT,fontWeight:700,fontSize:11,color:B.textMid,marginBottom:5,letterSpacing:0.8 }}>{label.toUpperCase()}</label>
+      {multi?<textarea id={id} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} rows={3} style={{ width:"100%",border:`1.5px solid ${B.border}`,borderRadius:14,padding:"12px 14px",fontFamily:FONT,fontSize:14,color:B.navy,outline:"none",resize:"none",background:B.offWhite,boxSizing:"border-box" }}/>
+      :<input id={id} type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} autoComplete={ac} style={{ width:"100%",border:`1.5px solid ${B.border}`,borderRadius:14,padding:"13px 14px",fontFamily:FONT,fontSize:14,color:B.navy,outline:"none",background:B.offWhite,boxSizing:"border-box" }}/>}
+    </div>
+  );
+  return (
+    <div style={{ position:"fixed",inset:0,background:B.white,zIndex:9000,overflowY:"auto" }}>
+      <div style={{ padding:"16px 20px 12px",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,background:B.white,zIndex:10,borderBottom:`1px solid ${B.border}` }}>
+        <Logo size={26}/>
+        {step>0&&cur!=="done"&&<button onClick={()=>setStep(s=>s-1)} style={{ background:"none",border:"none",fontFamily:FONT,fontSize:14,color:B.textMid,cursor:"pointer" }}>← Back</button>}
+      </div>
+      {cur!=="done"&&<div style={{ padding:"10px 20px 0" }}><div style={{ height:4,background:B.light,borderRadius:4 }}><div style={{ height:"100%",width:`${((step+1)/steps.length)*100}%`,background:B.grad,borderRadius:4,transition:"width .3s" }}/></div></div>}
+      <div style={{ padding:"24px 24px 100px" }}>
+        {cur==="type"&&(<div>
+          <h2 style={{ fontFamily:FONT,fontWeight:900,fontSize:26,color:B.navy,margin:"0 0 6px" }}>Join Quikix</h2>
+          <p style={{ fontFamily:FONT,fontSize:14,color:B.textMid,margin:"0 0 28px" }}>Individual or business?</p>
+          {[["personal","👤","Personal","Share opinions, vote, follow brands"],["business","🏢","Business","Create branded surveys, get insights"]].map(([id,icon,label,desc])=>(
+            <button key={id} onClick={()=>{upd("accountType")(id);next();}} style={{ width:"100%",padding:"20px 18px",border:`2px solid ${form.accountType===id?B.pink:B.border}`,borderRadius:18,background:form.accountType===id?`${B.pink}08`:B.white,textAlign:"left",cursor:"pointer",marginBottom:14,display:"flex",alignItems:"center",gap:16 }}>
+              <div style={{ width:52,height:52,borderRadius:14,background:form.accountType===id?B.grad:B.light,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,flexShrink:0 }}>{icon}</div>
+              <div><div style={{ fontFamily:FONT,fontWeight:800,fontSize:16,color:B.navy,marginBottom:3 }}>{label}</div><div style={{ fontFamily:FONT,fontSize:13,color:B.textMid }}>{desc}</div></div>
+            </button>
+          ))}
+        </div>)}
+        {cur==="info"&&(<div>
+          <h2 style={{ fontFamily:FONT,fontWeight:900,fontSize:26,color:B.navy,margin:"0 0 6px" }}>Your Profile</h2>
+          <p style={{ fontFamily:FONT,fontSize:14,color:B.textMid,margin:"0 0 24px" }}>Tell the Quikix community about yourself</p>
+          <div style={{ display:"flex",justifyContent:"center",marginBottom:24 }}>
+            <div style={{ width:90,height:90,borderRadius:"50%",background:form.brandColor||B.grad,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:FONT,fontWeight:900,fontSize:32,color:"#fff",boxShadow:B.shadowMd }}>{form.name?form.name[0]:"?"}</div>
+          </div>
+          <F label="Full Name" id="reg-name" value={form.name} onChange={upd("name")} placeholder="Your name" ac="name"/>
+          <F label="Username"  id="reg-user" value={form.username} onChange={upd("username")} placeholder="@handle" ac="username"/>
+          <F label="Email"     id="reg-email" value={form.email} onChange={upd("email")} placeholder="you@email.com" type="email" ac="email"/>
+          <F label="Password"  id="reg-pass"  value={form.password} onChange={upd("password")} placeholder="Min 8 characters" type="password" ac="new-password"/>
+          <F label="Bio"       id="reg-bio"   value={form.bio} onChange={upd("bio")} placeholder="Tell people about yourself..." multi/>
+        </div>)}
+        {cur==="brand"&&(<div>
+          <h2 style={{ fontFamily:FONT,fontWeight:900,fontSize:26,color:B.navy,margin:"0 0 6px" }}>{form.accountType==="business"?"Brand Kit":"Your Style"}</h2>
+          <p style={{ fontFamily:FONT,fontSize:14,color:B.textMid,margin:"0 0 24px" }}>Customize how you appear on Quikix</p>
+          <fieldset style={{ border:"none",padding:0,marginBottom:22 }}>
+            <legend style={{ fontFamily:FONT,fontWeight:700,fontSize:11,color:B.textMid,marginBottom:10,letterSpacing:0.8 }}>ACCENT COLOR</legend>
+            <div style={{ display:"flex",gap:12,flexWrap:"wrap" }}>
+              {["#E8407A","#F5A623","#2979FF","#7C4DFF","#00C853","#FF3B30","#1A2154","#FF6B6B","#00BCD4","#E50010"].map(c=>(
+                <button key={c} onClick={()=>upd("brandColor")(c)} aria-pressed={form.brandColor===c} style={{ width:44,height:44,borderRadius:"50%",background:c,border:form.brandColor===c?`3px solid ${B.navy}`:`2px solid transparent`,cursor:"pointer",transition:"all .15s" }}/>
+              ))}
+            </div>
+          </fieldset>
+          {form.accountType==="business"&&(<>
+            <div style={{ marginBottom:18 }}>
+              <label style={{ display:"block",fontFamily:FONT,fontWeight:700,fontSize:11,color:B.textMid,marginBottom:8,letterSpacing:0.8 }}>BRAND FONT</label>
+              <div style={{ display:"flex",gap:10 }}>
+                {[["Nunito","Friendly"],["Georgia","Classic"],["Courier New","Mono"],["Trebuchet MS","Modern"]].map(([font,label])=>(
+                  <button key={font} onClick={()=>upd("brandFont")(font)} aria-pressed={form.brandFont===font} style={{ flex:1,padding:"10px 4px",borderRadius:12,border:`2px solid ${form.brandFont===font?B.pink:B.border}`,background:form.brandFont===font?`${B.pink}10`:B.white,fontFamily:font,fontSize:12,fontWeight:600,color:form.brandFont===font?B.pink:B.navy,cursor:"pointer" }}>{label}</button>
+                ))}
+              </div>
+            </div>
+            <F label="Website" id="reg-web" value={form.website||""} onChange={upd("website")} placeholder="yoursite.com" ac="url"/>
+          </>)}
+          {/* Preview */}
+          <div style={{ background:B.offWhite,borderRadius:16,padding:16 }}>
+            <p style={{ fontFamily:FONT,fontWeight:700,fontSize:11,color:B.textMid,margin:"0 0 10px",letterSpacing:0.8 }}>PREVIEW</p>
+            <div style={{ display:"flex",alignItems:"center",gap:12 }}>
+              <div style={{ width:50,height:50,borderRadius:"50%",background:form.brandColor,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:FONT,fontWeight:900,fontSize:18,color:"#fff" }}>{form.name?.[0]||"?"}</div>
+              <div><div style={{ fontFamily:FONT,fontWeight:800,fontSize:15,color:B.navy }}>{form.name||"Your Name"}</div><div style={{ fontFamily:FONT,fontSize:12,color:B.textMid }}>@{form.username||"handle"}</div></div>
+              <div style={{ marginLeft:"auto",padding:"6px 14px",borderRadius:50,background:form.brandColor,fontFamily:FONT,fontWeight:800,fontSize:12,color:"#fff" }}>Follow</div>
+            </div>
+          </div>
+        </div>)}
+        {cur==="interests"&&(<div>
+          <h2 style={{ fontFamily:FONT,fontWeight:900,fontSize:26,color:B.navy,margin:"0 0 6px" }}>Your Interests</h2>
+          <p style={{ fontFamily:FONT,fontSize:14,color:B.textMid,margin:"0 0 20px" }}>Pick at least 3 to personalise your feed</p>
+          <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:14 }}>
+            {interests.map(i=>{
+              const on=form.interests.includes(i);
+              return(
+                <button key={i} onClick={()=>upd("interests")(on?form.interests.filter(x=>x!==i):[...form.interests,i])} aria-pressed={on}
+                  style={{ padding:"14px 8px",borderRadius:16,border:`2px solid ${on?form.brandColor:B.border}`,background:on?`${form.brandColor}15`:B.white,fontFamily:FONT,fontWeight:700,fontSize:12,color:on?form.brandColor:B.textMid,cursor:"pointer",transition:"all .15s",display:"flex",flexDirection:"column",alignItems:"center",gap:6 }}>
+                  <span style={{ fontSize:22 }}>{INTEREST_ICONS[i]||"•"}</span>{i}
+                  {on&&<span style={{ fontSize:10,color:form.brandColor }}>✓</span>}
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ padding:"10px 14px",borderRadius:12,background:form.interests.length>=3?`${B.green}15`:B.light,marginBottom:16,display:"flex",alignItems:"center",gap:8,transition:"background .3s" }} aria-live="polite">
+            <span style={{ fontSize:16 }}>{form.interests.length>=3?"✅":"👆"}</span>
+            <span style={{ fontFamily:FONT,fontSize:13,fontWeight:700,color:form.interests.length>=3?B.green:B.textMid }}>
+              {form.interests.length>=3?`Great! ${form.interests.length} selected — feed personalised`:`Select ${3-form.interests.length} more to continue`}
+            </span>
+          </div>
+          <p style={{ fontFamily:FONT,fontWeight:800,fontSize:15,color:B.navy,margin:"20px 0 14px" }}>Suggested Accounts</p>
+          {SUGGESTED.slice(0,3).map(u=>(
+            <div key={u.id} style={{ display:"flex",alignItems:"center",gap:12,padding:"12px 0",borderBottom:`1px solid ${B.border}` }}>
+              <div style={{ width:44,height:44,borderRadius:"50%",background:u.brandColor,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:FONT,fontWeight:900,fontSize:16,color:"#fff",flexShrink:0 }}>{u.avatar}</div>
+              <div style={{ flex:1 }}><div style={{ fontFamily:FONT,fontWeight:800,fontSize:14,color:B.navy }}>{u.name} {u.verified&&<span style={{ color:u.brandColor,fontSize:12 }}>✓</span>}</div><div style={{ fontFamily:FONT,fontSize:12,color:B.textMid }}>{fmt(u.followers)} followers</div></div>
+              <button style={{ padding:"8px 18px",borderRadius:50,background:u.brandColor,border:"none",fontFamily:FONT,fontWeight:800,fontSize:12,color:"#fff",cursor:"pointer" }}>Follow</button>
+            </div>
+          ))}
+        </div>)}
+        {cur==="login"&&(<div>
+          <h2 style={{ fontFamily:FONT,fontWeight:900,fontSize:26,color:B.navy,margin:"0 0 6px" }}>Welcome Back!</h2>
+          <p style={{ fontFamily:FONT,fontSize:14,color:B.textMid,margin:"0 0 28px" }}>Sign in to your Quikix account</p>
+          <F label="Email"    id="li-email" value={form.email}    onChange={upd("email")}    placeholder="you@email.com"   type="email"    ac="email"/>
+          <F label="Password" id="li-pass"  value={form.password} onChange={upd("password")} placeholder="Your password"   type="password" ac="current-password"/>
+          <button style={{ background:"none",border:"none",color:B.pink,fontFamily:FONT,fontWeight:700,fontSize:14,cursor:"pointer",padding:"0 0 20px" }}>Forgot password?</button>
+          <p style={{ textAlign:"center",color:B.textMid,fontFamily:FONT,fontSize:12,margin:"0 0 14px" }}>— or continue with —</p>
+          <div style={{ display:"flex",gap:10 }}>
+            {[["G","#DB4437","Google"],["f","#4267B2","Facebook"],["🍎","#000","Apple"]].map(([l,c,name],i)=>(
+              <button key={i} onClick={next} aria-label={`Sign in with ${name}`} style={{ flex:1,padding:"13px 0",border:`1.5px solid ${B.border}`,borderRadius:14,background:B.white,fontFamily:FONT,fontWeight:800,fontSize:16,color:c,cursor:"pointer" }}>{l}</button>
+            ))}
+          </div>
+        </div>)}
+        {cur==="done"&&(<div style={{ textAlign:"center",paddingTop:40 }}>
+          <div style={{ fontSize:70,marginBottom:16 }}>🎉</div>
+          <h2 style={{ fontFamily:FONT,fontWeight:900,fontSize:28,color:B.navy,margin:"0 0 10px" }}>{type==="signup"?`Welcome, ${form.name?.split(" ")[0]||"friend"}!`:"You're back!"}</h2>
+          <p style={{ fontFamily:FONT,fontSize:16,color:B.textMid,lineHeight:1.6,margin:"0 0 20px" }}>{type==="signup"?"Your Quikix account is ready.\nStart asking. Start listening.":"Great to have you back!"}</p>
+          {type==="signup"&&(
+            <div style={{ background:`${B.gold}18`,border:`1.5px solid ${B.gold}44`,borderRadius:16,padding:"14px 18px",marginBottom:8,display:"flex",alignItems:"center",gap:12 }}>
+              <span style={{ fontSize:28 }}>⭐</span>
+              <div style={{ textAlign:"left" }}>
+                <div style={{ fontFamily:FONT,fontWeight:900,fontSize:15,color:B.navy,marginBottom:2 }}>You start with 50 XP!</div>
+                <div style={{ fontFamily:FONT,fontSize:13,color:B.textMid }}>Vote, create and share to level up and earn badges.</div>
+              </div>
+            </div>
+          )}
+        </div>)}
+        {/* Disabled Continue until 3 interests selected */}
+        <button onClick={cur==="interests"&&form.interests.length<3?undefined:next}
+          disabled={cur==="interests"&&form.interests.length<3}
+          style={{ width:"100%",marginTop:cur==="done"?8:24,padding:"16px 0",borderRadius:50,background:cur==="interests"&&form.interests.length<3?B.light:B.grad,border:"none",fontFamily:FONT,fontWeight:900,fontSize:15,color:cur==="interests"&&form.interests.length<3?B.textMid:"#fff",cursor:cur==="interests"&&form.interests.length<3?"not-allowed":"pointer",boxShadow:cur==="interests"&&form.interests.length<3?"none":"0 6px 24px rgba(232,64,122,0.35)",transition:"all .2s" }}>
+          {cur==="done"?"Let's Go! →":cur==="interests"?form.interests.length>=3?"Finish Setup →":"Select More Interests":cur==="login"?"Sign In →":"Continue →"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// XP BADGE — shown in top bar
+// ═══════════════════════════════════════════════════════════════════════════════
+function XPBadge({ onClick }) {
+  const { xp, level } = useXP();
+  const { nextLevel, progress } = useMemo(() => {
+    const next = LEVELS.find(l=>l.min>xp) || LEVELS[LEVELS.length-1];
+    const prog = next.min===Infinity ? 100 : pct(xp-level.min, next.min-level.min);
+    return { nextLevel:next, progress:prog };
+  }, [xp, level]);
+  return (
+    <button onClick={onClick} aria-label={`Level: ${level.label}, ${xp} XP`}
+      style={{ display:"flex",alignItems:"center",gap:6,background:"none",border:`1.5px solid ${level.color}44`,borderRadius:50,padding:"5px 11px",cursor:"pointer" }}>
+      <span style={{ fontSize:14 }}>{level.icon}</span>
+      <div>
+        <div style={{ fontFamily:FONT,fontWeight:800,fontSize:10,color:level.color,lineHeight:1 }}>{level.label}</div>
+        <div style={{ width:44,height:3,background:B.light,borderRadius:2,marginTop:2 }}>
+          <div style={{ height:"100%",width:`${progress}%`,background:level.color,borderRadius:2,transition:"width .5s" }}/>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// POST CARD  (All poll types + XP integration)
+// ═══════════════════════════════════════════════════════════════════════════════
+const PostCard = memo(function PostCard({ post, user, onVote, onExpand, onShare, onSave, onRemind, savedIds, remindIds }) {
+  const author = USERS[post.authorId]||USERS.me;
+  const ac = author.brandColor||B.pink;
+  const toast = useToast();
+  const { earn } = useXP();
+  const { D } = useTheme();
+  const [lv, setLv] = useState(()=>[...post.votes]);
+  const [voted, setVoted] = useState(post.userVote);
+  const [showComments, setShowComments] = useState(false);
+  const [comments, setComments] = useState(()=>post.comments||[]);
+  const [commentText, setCommentText] = useState("");
+  const [charCount, setCharCount] = useState(0);
+  const [sliderVal, setSliderVal] = useState(5);
+  const [rankItems, setRankItems] = useState(()=>post.options ? [...post.options] : []);
+  const [rankDone, setRankDone] = useState(false);
+  const MAX_CHARS=280;
+  const totalVotes=(lv||[]).reduce((a,b)=>a+b,0);
+  const isSaved=(savedIds||[]).includes(post.id);
+  const isReminded=(remindIds||[]).includes(post.id);
+  const isClosed=post.endsAt<=Date.now();
+  const isMyPost=post.authorId==="me";
+
+  const postRef = useRef(post);
+  useEffect(()=>{ postRef.current=post; },[post]);
+
+  const vote = useCallback((i) => {
+    if (voted!==null||isClosed) return;
+    try { navigator.vibrate&&navigator.vibrate(12); } catch {}
+    setLv(v=>{ const n=[...v]; n[i]=(n[i]||0)+1; return n; });
+    setVoted(i);
+    onVote&&onVote(post.id,i,isMyPost);
+    earn(10,"Vote cast");
+    toast("Vote recorded ✓");
+  }, [voted,isClosed,post.id,onVote,isMyPost,earn,toast]);
+
+  const handleShare = async() => {
+    if(navigator.share){try{await navigator.share({title:"Quikix Poll",text:post.question,url:`https://quikix.com/q/${post.id}`});toast("Shared!");return;}catch{}}
+    onShare&&onShare(post);
+  };
+  const handleSave   = () => { onSave&&onSave(post.id);     toast(isSaved?"Removed from saved":"Saved 🔖"); };
+  const handleRemind = () => { onRemind&&onRemind(post.id); toast(isReminded?"Reminder removed":"Reminder set 🔔"); };
+  const handleComment = () => {
+    if(!commentText.trim()) return;
+    setComments(c=>[...c,{id:uid(),authorId:"me",text:commentText,time:"Just now",likes:0}]);
+    setCommentText(""); setCharCount(0);
+    earn(5,"Comment posted");
+    toast("Comment posted!");
+  };
+
+  const ClosedOverlay = () => isClosed ? (
+    <div style={{ position:"absolute",inset:0,background:"rgba(0,0,0,0.52)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3,pointerEvents:"none" }}>
+      <div style={{ background:"rgba(255,255,255,0.96)",borderRadius:14,padding:"10px 20px",textAlign:"center" }}>
+        <div style={{ fontFamily:FONT,fontWeight:900,fontSize:15,color:B.navy }}>Poll Closed</div>
+        <div style={{ fontFamily:FONT,fontSize:13,color:B.textMid,marginTop:2 }}>Final results shown</div>
+      </div>
+    </div>
+  ) : null;
+
+  return (
+    <article style={{ background:D.card,borderBottom:`8px solid ${D.bg}`,position:"relative" }}>
+      {post.trending&&<div style={{ position:"absolute",top:14,right:14,zIndex:2,background:B.grad,borderRadius:50,padding:"3px 10px",display:"flex",alignItems:"center",gap:4,animation:"trendPulse 2s ease-in-out infinite" }}>
+        <span style={{ fontSize:10 }}>🔥</span>
+        <span style={{ fontFamily:FONT,fontWeight:800,fontSize:10,color:"#fff" }}>TRENDING · {fmt(totalVotes)}</span>
+      </div>}
+
+      {/* Header */}
+      <div style={{ padding:"14px 16px 10px",display:"flex",alignItems:"center",gap:10 }}>
+        <button onClick={()=>onExpand&&onExpand(post,"profile")} style={{ background:"none",border:"none",cursor:"pointer",padding:0,flexShrink:0 }}>
+          <div style={{ width:44,height:44,borderRadius:"50%",background:ac,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:FONT,fontWeight:900,fontSize:16,color:"#fff",border:author.accountType==="business"?`2px solid ${ac}`:"none" }}>{author.avatar}</div>
+        </button>
+        <div style={{ flex:1,minWidth:0 }}>
+          <div style={{ display:"flex",alignItems:"center",gap:5 }}>
+            <button onClick={()=>onExpand&&onExpand(post,"profile")} style={{ background:"none",border:"none",padding:0,cursor:"pointer",fontFamily:FONT,fontWeight:800,fontSize:15,color:D.text }}>{author.name}</button>
+            {author.verified&&<span style={{ fontSize:12,color:ac }}>✓</span>}
+            {author.accountType==="business"&&<span style={{ fontFamily:FONT,fontSize:10,fontWeight:700,color:ac,background:`${ac}18`,padding:"2px 7px",borderRadius:50 }}>Brand</span>}
+          </div>
+          <div style={{ fontFamily:FONT,fontSize:12,color:D.textMid }}>📍 {author.location}</div>
+        </div>
+        <div style={{ display:"flex",flexDirection:"column",alignItems:"flex-end",gap:5 }}>
+          <Countdown endsAt={post.endsAt}/>
+          <div style={{ display:"flex",gap:7,alignItems:"center" }}>
+            <button onClick={handleSave}   aria-pressed={isSaved}    style={{ background:"none",border:"none",cursor:"pointer",color:isSaved?B.orange:D.textGray,padding:1 }}><Ic.BookmarkFill/></button>
+            <button onClick={handleRemind} aria-pressed={isReminded} style={{ background:"none",border:"none",cursor:"pointer",color:isReminded?B.blue:D.textGray,padding:1 }}><Ic.Bell2/></button>
+            <button onClick={handleShare}  aria-label="Share poll"   style={{ width:26,height:26,borderRadius:"50%",border:`1.5px solid ${D.border}`,background:D.surface,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:D.textMid }}><Ic.Share/></button>
+          </div>
+        </div>
+      </div>
+
+      <h3 style={{ padding:"0 16px 10px",fontFamily:FONT,fontWeight:700,fontSize:16,color:D.text,lineHeight:1.4,margin:0 }}>{post.question}</h3>
+
+      {/* ── A/B ── */}
+      {post.type==="ab"&&post.images&&(
+        <div style={{ display:"flex",gap:2,position:"relative" }}>
+          <ClosedOverlay/>
+          {post.images.slice(0,2).map((img,i)=>(
+            <div key={i} style={{ flex:1,position:"relative",overflow:"hidden" }}>
+              <button onClick={()=>vote(i)} disabled={voted!==null||isClosed}
+                style={{ width:"100%",border:"none",padding:0,cursor:voted!==null||isClosed?"default":"pointer",background:"transparent",display:"block" }}>
+                <img src={img} alt={`Option ${i+1}${voted!==null?` — ${pct(lv[i]||0,totalVotes)}%`:""}`} loading="lazy"
+                  style={{ width:"100%",height:260,objectFit:"cover",display:"block",transition:"opacity .25s",opacity:voted!==null&&voted!==i?0.45:1 }}/>
+              </button>
+              {voted!==null&&<div style={{ position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",pointerEvents:"none" }}>
+                <div style={{ background:voted===i?"rgba(255,255,255,0.96)":"rgba(0,0,0,0.45)",borderRadius:12,padding:"8px 14px",textAlign:"center" }}>
+                  <div style={{ fontFamily:FONT,fontWeight:900,fontSize:20,color:voted===i?ac:"#fff" }}>{pct(lv[i]||0,totalVotes)}%</div>
+                  <div style={{ fontFamily:FONT,fontSize:11,color:voted===i?B.textMid:"rgba(255,255,255,0.8)",marginTop:2 }}>{voted===i?"✓ Your vote":fmt(lv[i]||0)+" votes"}</div>
+                </div>
+              </div>}
+              <div style={{ position:"absolute",bottom:10,[i===0?"left":"right"]:10,pointerEvents:"none" }}>
+                <div style={{ width:50,height:50,borderRadius:"50%",background:voted===i?ac:"rgba(255,255,255,0.93)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 12px rgba(0,0,0,0.28)" }}>
+                  <span style={{ fontSize:9,fontWeight:900,color:voted===i?"#fff":B.pink,fontFamily:FONT,lineHeight:1.1 }}>Q</span>
+                  <span style={{ fontSize:10,fontWeight:800,color:voted===i?"#fff":B.navy,fontFamily:FONT,lineHeight:1.1 }}>{voted!==null?`${pct(lv[i]||0,totalVotes)}%`:fmt(lv[i]||0)}</span>
+                </div>
+              </div>
+              {voted!==null&&<div style={{ position:"absolute",bottom:0,left:0,right:0,height:4,pointerEvents:"none" }}><div style={{ height:"100%",width:`${pct(lv[i]||0,totalVotes)}%`,background:voted===i?ac:"rgba(255,255,255,0.4)",transition:"width .7s ease" }}/></div>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── 4-Image Grid ── */}
+      {post.type==="image4"&&post.images&&(
+        <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:2,position:"relative" }}>
+          <ClosedOverlay/>
+          {post.images.slice(0,4).map((img,i)=>(
+            <div key={i} style={{ position:"relative",overflow:"hidden" }}>
+              <button onClick={()=>vote(i)} disabled={voted!==null||isClosed}
+                style={{ width:"100%",border:"none",padding:0,cursor:voted!==null||isClosed?"default":"pointer",background:"transparent",display:"block" }}>
+                <img src={img} alt={`Option ${String.fromCharCode(65+i)}`} loading="lazy"
+                  style={{ width:"100%",height:160,objectFit:"cover",display:"block",transition:"opacity .25s",opacity:voted!==null&&voted!==i?0.5:1 }}/>
+              </button>
+              <div style={{ position:"absolute",top:6,left:8,background:"rgba(0,0,0,0.55)",borderRadius:20,padding:"2px 9px" }}>
+                <span style={{ fontFamily:FONT,fontSize:11,fontWeight:700,color:"#fff" }}>Option {String.fromCharCode(65+i)}</span>
+              </div>
+              {voted!==null&&<div style={{ position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",pointerEvents:"none" }}>
+                <div style={{ background:voted===i?"rgba(255,255,255,0.94)":"rgba(0,0,0,0.5)",borderRadius:10,padding:"6px 12px",textAlign:"center" }}>
+                  <div style={{ fontFamily:FONT,fontWeight:900,fontSize:18,color:voted===i?ac:"#fff" }}>{pct(lv[i]||0,totalVotes)}%</div>
+                  {voted===i&&<div style={{ fontFamily:FONT,fontSize:10,color:B.textMid }}>✓ Your vote</div>}
+                </div>
+              </div>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── Text / Yes-No ── */}
+      {(post.type==="text"||(post.type==="yesno"&&!post.images))&&(
+        <div style={{ position:"relative",minHeight:220,background:post.bg||B.grad,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"50px 32px 80px" }}>
+          <ClosedOverlay/>
+          <p style={{ fontFamily:FONT,fontWeight:700,fontSize:20,color:post.textColor||"#fff",textAlign:"center",lineHeight:1.4,margin:0 }}>{post.question}</p>
+          {voted!==null&&<div style={{ position:"absolute",top:14,right:14,background:"rgba(255,255,255,0.2)",borderRadius:10,padding:"6px 12px" }}>
+            <span style={{ fontFamily:FONT,fontWeight:800,fontSize:13,color:"#fff" }}>👍 {pct(lv[0]||0,totalVotes)}% · 👎 {pct(lv[1]||0,totalVotes)}%</span>
+          </div>}
+          {!isClosed&&<>
+            <div style={{ position:"absolute",bottom:14,left:16 }}><button onClick={e=>{e.stopPropagation();vote(1);}} disabled={voted!==null} aria-label="Vote No" style={{ width:52,height:52,borderRadius:"50%",background:"rgba(255,255,255,0.2)",backdropFilter:"blur(8px)",border:"2px solid rgba(255,255,255,0.4)",cursor:voted!==null?"default":"pointer",fontSize:22,display:"flex",alignItems:"center",justifyContent:"center",opacity:voted!==null&&voted!==1?0.45:1 }}>👎</button></div>
+            <div style={{ position:"absolute",bottom:14,right:16 }}><button onClick={e=>{e.stopPropagation();vote(0);}} disabled={voted!==null} aria-label="Vote Yes" style={{ width:52,height:52,borderRadius:"50%",background:"rgba(255,255,255,0.2)",backdropFilter:"blur(8px)",border:"2px solid rgba(255,255,255,0.4)",cursor:voted!==null?"default":"pointer",fontSize:22,display:"flex",alignItems:"center",justifyContent:"center",opacity:voted!==null&&voted!==0?0.45:1 }}>👍</button></div>
+          </>}
+        </div>
+      )}
+
+      {/* ── Multiple Choice ── */}
+      {post.type==="multi"&&post.options&&(
+        <div style={{ padding:"0 16px 12px" }}>
+          {post.options.map((opt,i)=>{
+            const v=lv[i]||0, vPct=pct(v,totalVotes), isWinner=voted!==null&&(lv[i]||0)===Math.max(...lv);
+            return (
+              <button key={i} onClick={()=>vote(i)} disabled={voted!==null||isClosed}
+                style={{ width:"100%",marginBottom:8,padding:"11px 14px",border:`2px solid ${voted===i?ac:D.border}`,borderRadius:12,background:D.surface,cursor:voted!==null||isClosed?"default":"pointer",textAlign:"left",position:"relative",overflow:"hidden",transition:"border-color .15s" }}>
+                {voted!==null&&<div style={{ position:"absolute",inset:0,width:`${vPct}%`,background:voted===i?`${ac}20`:`${D.border}77`,transition:"width .8s ease",borderRadius:10 }}/>}
+                <div style={{ position:"relative",display:"flex",alignItems:"center",justifyContent:"space-between",gap:8 }}>
+                  <div style={{ display:"flex",alignItems:"center",gap:9 }}>
+                    <div style={{ width:22,height:22,borderRadius:"50%",border:`2px solid ${voted===i?ac:D.border}`,background:voted===i?ac:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0 }}>
+                      {voted===i&&<span style={{ fontSize:11,color:"#fff" }}>✓</span>}
+                    </div>
+                    <span style={{ fontFamily:FONT,fontWeight:voted===i?800:600,fontSize:14,color:D.text }}>{opt}</span>
+                  </div>
+                  {voted!==null&&<span style={{ fontFamily:FONT,fontWeight:800,fontSize:13,color:isWinner?ac:D.textMid,flexShrink:0 }}>{vPct}%</span>}
+                </div>
+              </button>
+            );
+          })}
+          {voted!==null&&<div style={{ fontFamily:FONT,fontSize:12,color:D.textMid,textAlign:"center",marginTop:4 }}>{fmt(totalVotes)} total votes</div>}
+        </div>
+      )}
+
+      {/* ── Slider Scale ── */}
+      {post.type==="slider"&&(
+        <div style={{ padding:"10px 20px 16px" }}>
+          <div style={{ display:"flex",justifyContent:"space-between",marginBottom:8 }}>
+            <span style={{ fontFamily:FONT,fontSize:12,color:D.textMid }}>1 — Not at all</span>
+            <span style={{ fontFamily:FONT,fontSize:12,color:D.textMid }}>10 — Absolutely!</span>
+          </div>
+          <input type="range" min={1} max={10} value={sliderVal} onChange={e=>setSliderVal(parseInt(e.target.value))} disabled={voted!==null||isClosed}
+            style={{ width:"100%",accentColor:ac,cursor:voted!==null||isClosed?"default":"pointer",marginBottom:12 }}/>
+          <div style={{ textAlign:"center",marginBottom:14 }}>
+            <span style={{ fontFamily:FONT,fontWeight:900,fontSize:40,color:ac,lineHeight:1 }}>{sliderVal}</span>
+            <span style={{ fontFamily:FONT,fontSize:14,color:D.textMid }}> / 10</span>
+          </div>
+          {voted===null&&!isClosed&&(
+            <button onClick={()=>vote(sliderVal-1)} style={{ width:"100%",padding:"12px 0",borderRadius:50,background:grad(ac,B.orange),border:"none",fontFamily:FONT,fontWeight:800,fontSize:14,color:"#fff",cursor:"pointer" }}>Submit Rating</button>
+          )}
+          {voted!==null&&lv.length===10&&(
+            <div>
+              <div style={{ fontFamily:FONT,fontWeight:600,fontSize:12,color:D.textMid,marginBottom:8 }}>Response distribution ({fmt(totalVotes)} ratings)</div>
+              <div style={{ display:"flex",gap:3,alignItems:"flex-end",height:56 }}>
+                {lv.map((v,i)=>{
+                  const maxV=Math.max(...lv,1);
+                  return <div key={i} style={{ flex:1,background:i===sliderVal-1?ac:`${ac}40`,borderRadius:"4px 4px 0 0",height:`${Math.max(6,(v/maxV)*56)}px`,transition:"height .5s ease",position:"relative" }}>
+                    {i===sliderVal-1&&<div style={{ position:"absolute",top:-16,left:"50%",transform:"translateX(-50%)",fontFamily:FONT,fontSize:8,fontWeight:900,color:ac,whiteSpace:"nowrap" }}>Your pick</div>}
+                  </div>;
+                })}
+              </div>
+              <div style={{ display:"flex",justifyContent:"space-between",marginTop:4 }}>
+                {[1,5,10].map(n=><span key={n} style={{ fontFamily:FONT,fontSize:9,color:D.textGray }}>{n}</span>)}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Ranked Choice ── */}
+      {post.type==="ranked"&&post.options&&(
+        <div style={{ padding:"0 16px 12px" }}>
+          {voted===null&&!rankDone?(
+            <>
+              <p style={{ fontFamily:FONT,fontSize:12,color:D.textMid,margin:"0 0 10px" }}>Tap ▲▼ to reorder, then submit your ranking</p>
+              {rankItems.map((item,i)=>(
+                <div key={item} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:D.surface,borderRadius:12,marginBottom:8,border:`1.5px solid ${D.border}` }}>
+                  <div style={{ width:28,height:28,borderRadius:8,background:B.grad,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:FONT,fontWeight:900,fontSize:13,color:"#fff",flexShrink:0 }}>{i+1}</div>
+                  <span style={{ fontFamily:FONT,fontWeight:700,fontSize:14,color:D.text,flex:1 }}>{item}</span>
+                  <div style={{ display:"flex",flexDirection:"column",gap:4 }}>
+                    <button onClick={()=>{ if(i===0)return; const a=[...rankItems];[a[i-1],a[i]]=[a[i],a[i-1]];setRankItems(a); }} disabled={i===0}
+                      style={{ background:"none",border:"none",cursor:i===0?"not-allowed":"pointer",color:i===0?D.textGray:ac,fontSize:13,padding:0,lineHeight:1 }}>▲</button>
+                    <button onClick={()=>{ if(i===rankItems.length-1)return; const a=[...rankItems];[a[i+1],a[i]]=[a[i],a[i+1]];setRankItems(a); }} disabled={i===rankItems.length-1}
+                      style={{ background:"none",border:"none",cursor:i===rankItems.length-1?"not-allowed":"pointer",color:i===rankItems.length-1?D.textGray:ac,fontSize:13,padding:0,lineHeight:1 }}>▼</button>
+                  </div>
+                </div>
+              ))}
+              {!isClosed&&<button onClick={()=>{ setRankDone(true); vote(0); earn(15,"Ranked choice submitted"); }} style={{ width:"100%",padding:"12px 0",borderRadius:50,background:grad(ac,B.orange),border:"none",fontFamily:FONT,fontWeight:800,fontSize:14,color:"#fff",cursor:"pointer",marginTop:4 }}>Submit My Ranking</button>}
+            </>
+          ):(
+            <div>
+              <p style={{ fontFamily:FONT,fontWeight:700,fontSize:13,color:B.green,margin:"0 0 10px" }}>✓ Submitted! Community average ranking:</p>
+              {post.options.map((opt,i)=>(
+                <div key={opt} style={{ display:"flex",alignItems:"center",gap:10,marginBottom:8 }}>
+                  <span style={{ fontFamily:FONT,fontWeight:800,fontSize:12,color:ac,width:22 }}>#{i+1}</span>
+                  <span style={{ fontFamily:FONT,fontSize:13,color:D.text,flex:1 }}>{opt}</span>
+                  <div style={{ width:80,height:6,background:D.border,borderRadius:3 }}><div style={{ height:"100%",width:`${pct(post.votes[i]||0,totalVotes)}%`,background:B.grad,borderRadius:3,transition:"width .6s ease" }}/></div>
+                  <span style={{ fontFamily:FONT,fontSize:11,color:D.textMid,width:30,textAlign:"right" }}>{pct(post.votes[i]||0,totalVotes)}%</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Video Poll ── */}
+      {post.type==="video"&&(
+        <div style={{ position:"relative",background:"#000",minHeight:220,display:"flex",alignItems:"center",justifyContent:"center" }}>
+          {post.images?.[0]?(
+            <video src={post.images[0]} controls playsInline style={{ width:"100%",maxHeight:320,display:"block" }}/>
+          ):(
+            <div style={{ padding:"40px 20px",textAlign:"center" }}>
+              <div style={{ fontSize:48,marginBottom:12 }}>🎬</div>
+              <p style={{ fontFamily:FONT,fontWeight:700,fontSize:15,color:"#fff",margin:0 }}>{post.question}</p>
+            </div>
+          )}
+          {!isClosed&&voted===null&&(
+            <div style={{ position:"absolute",bottom:12,left:0,right:0,display:"flex",justifyContent:"center",gap:16 }}>
+              <button onClick={e=>{e.stopPropagation();vote(1);}} aria-label="Vote No" style={{ width:56,height:56,borderRadius:"50%",background:"rgba(255,255,255,0.18)",backdropFilter:"blur(8px)",border:"2px solid rgba(255,255,255,0.4)",cursor:"pointer",fontSize:24,display:"flex",alignItems:"center",justifyContent:"center" }}>👎</button>
+              <button onClick={e=>{e.stopPropagation();vote(0);}} aria-label="Vote Yes" style={{ width:56,height:56,borderRadius:"50%",background:"rgba(255,255,255,0.18)",backdropFilter:"blur(8px)",border:"2px solid rgba(255,255,255,0.4)",cursor:"pointer",fontSize:24,display:"flex",alignItems:"center",justifyContent:"center" }}>👍</button>
+            </div>
+          )}
+          {voted!==null&&(
+            <div style={{ position:"absolute",bottom:12,right:14,background:"rgba(255,255,255,0.15)",borderRadius:10,padding:"6px 12px" }}>
+              <span style={{ fontFamily:FONT,fontWeight:800,fontSize:13,color:"#fff" }}>👍 {pct(lv[0]||0,totalVotes)}% · 👎 {pct(lv[1]||0,totalVotes)}%</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Social proof banner */}
+      {post.trending&&voted===null&&!isClosed&&(
+        <div style={{ padding:"6px 16px",background:`${B.orange}12`,display:"flex",alignItems:"center",gap:6 }}>
+          <span style={{ fontSize:14 }}>🔥</span>
+          <span style={{ fontFamily:FONT,fontSize:12,color:B.orange,fontWeight:700 }}>{fmt(totalVotes)} people voted — join the conversation!</span>
+        </div>
+      )}
+
+      {/* Immersive */}
+      <button onClick={()=>onExpand&&onExpand(post,"immersive")} style={{ width:"100%",padding:"7px 0",background:`${ac}10`,border:"none",borderTop:`1px solid ${D.border}`,cursor:"pointer",fontFamily:FONT,fontSize:12,color:ac,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",gap:6 }}>
+        ⛶ Open Immersive View
+      </button>
+
+      {/* Reactions */}
+      <div style={{ padding:"8px 16px 4px",overflowX:"auto",scrollbarWidth:"none" }}>
+        <ReactionBar postId={post.id} initial={post.reactions}/>
+      </div>
+
+      {/* Footer stats */}
+      <div style={{ padding:"6px 16px 8px" }}>
+        <div style={{ fontFamily:FONT,fontSize:13,color:ac,marginBottom:6 }}>{post.tags.join(" ")}</div>
+        <div style={{ display:"flex",gap:12,alignItems:"center",flexWrap:"wrap" }}>
+          <span style={{ fontFamily:FONT,fontSize:12,color:D.textMid,display:"flex",alignItems:"center",gap:4 }}><Ic.Eye/> {fmt(post.views)}</span>
+          <span style={{ fontFamily:FONT,fontSize:12,color:D.textMid,display:"flex",alignItems:"center",gap:4 }}><Ic.Share/> {fmt(post.shares)}</span>
+          <button onClick={()=>setShowComments(v=>!v)} style={{ background:"none",border:"none",fontFamily:FONT,fontSize:12,color:D.textMid,cursor:"pointer",padding:0,display:"flex",alignItems:"center",gap:4 }}>
+            <Ic.Comment/> {comments.length>0?`${comments.length} comment${comments.length>1?"s":""}`:""} {showComments?"▲":"▼"}
+          </button>
+          {voted!==null&&(
+            <button onClick={()=>toast("Story shared! 📸")} style={{ marginLeft:"auto",background:`${B.purple}15`,border:`1px solid ${B.purple}44`,borderRadius:50,padding:"4px 12px",fontFamily:FONT,fontSize:11,fontWeight:700,color:B.purple,cursor:"pointer" }}>📸 Share Result</button>
+          )}
+          {user?.accountType==="business"&&(
+            <button onClick={()=>toast("Boost started! 🚀")} style={{ display:"flex",alignItems:"center",gap:4,padding:"5px 12px",borderRadius:50,background:`${ac}15`,border:`1.5px solid ${ac}44`,fontFamily:FONT,fontSize:11,fontWeight:800,color:ac,cursor:"pointer" }}><Ic.Boost/> Boost</button>
+          )}
+        </div>
+      </div>
+
+      {/* Comments */}
+      {showComments&&(
+        <div style={{ borderTop:`1px solid ${D.border}`,padding:"12px 16px 16px" }}>
+          {comments.length===0&&<p style={{ textAlign:"center",color:D.textMid,fontFamily:FONT,fontSize:13,padding:"8px 0",margin:0 }}>No comments yet. Be first!</p>}
+          {comments.map(c=>{const ca=USERS[c.authorId]||USERS.me; return(
+            <div key={c.id} style={{ display:"flex",gap:10,marginBottom:12 }}>
+              <div style={{ width:32,height:32,borderRadius:"50%",background:ca.brandColor||B.grad,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:FONT,fontWeight:900,fontSize:12,color:"#fff",flexShrink:0 }}>{ca.avatar}</div>
+              <div style={{ flex:1,background:D.bg,borderRadius:"0 12px 12px 12px",padding:"8px 12px" }}>
+                <div style={{ fontFamily:FONT,fontWeight:800,fontSize:12,color:D.text,marginBottom:2 }}>{ca.name}</div>
+                <div style={{ fontFamily:FONT,fontSize:13,color:D.text }}>{c.text}</div>
+                <div style={{ fontFamily:FONT,fontSize:10,color:D.textGray,marginTop:4 }}>{c.time}</div>
+              </div>
+            </div>
+          );})}
+          <div style={{ display:"flex",gap:8,alignItems:"flex-end",marginTop:8 }}>
+            <div style={{ flex:1 }}>
+              <input value={commentText} onChange={e=>{if(e.target.value.length<=MAX_CHARS){setCommentText(e.target.value);setCharCount(e.target.value.length);}}} onKeyDown={e=>e.key==="Enter"&&handleComment()} placeholder="Add a comment…" maxLength={MAX_CHARS} aria-label="Write a comment"
+                style={{ width:"100%",border:`1.5px solid ${D.border}`,borderRadius:50,padding:"9px 14px",fontFamily:FONT,fontSize:13,outline:"none",background:D.bg,color:D.text,boxSizing:"border-box" }}/>
+              {charCount>0&&<div style={{ textAlign:"right",fontFamily:FONT,fontSize:10,color:charCount>250?B.red:D.textGray,marginTop:3 }}>{MAX_CHARS-charCount}</div>}
+            </div>
+            <button onClick={handleComment} aria-label="Post comment" style={{ width:36,height:36,borderRadius:"50%",background:ac,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,color:"#fff" }}><Ic.Send/></button>
+          </div>
+        </div>
+      )}
+    </article>
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FULL SCREEN  (keyboard nav, aria)
+// ═══════════════════════════════════════════════════════════════════════════════
+function FullScreen({ posts, startIdx, onClose, onVote }) {
+  const [idx,setIdx]=useState(startIdx);
+  const [anim,setAnim]=useState(null);
+  const touchY=useRef(null);
+  const post=posts[idx], author=USERS[post?.authorId]||USERS.me;
+  const toast=useToast(); const {earn}=useXP();
+  const [lv,setLv]=useState(()=>posts.map(p=>({v:[...p.votes],voted:p.userVote})));
+  const cur=lv[idx], total=cur.v.reduce((a,b)=>a+(b||0),0), isClosed=post?.endsAt<=Date.now();
+
+  const go=dir=>{const nx=idx+dir;if(nx<0||nx>=posts.length)return;setAnim(dir>0?"up":"down");setTimeout(()=>{setIdx(nx);setAnim(null);},260);};
+  const vote=i=>{if(cur.voted!==null||isClosed)return;try{navigator.vibrate&&navigator.vibrate(12);}catch{}const nl=[...lv];nl[idx]={v:cur.v.map((x,j)=>j===i?x+1:x),voted:i};setLv(nl);onVote&&onVote(post.id,i,post.authorId==="me");earn(10,"Vote cast");toast("Voted! ✓");};
+
+  useEffect(()=>{
+    const h=e=>{if(e.key==="Escape")onClose();if(e.key==="ArrowDown")go(1);if(e.key==="ArrowUp")go(-1);};
+    window.addEventListener("keydown",h);return()=>window.removeEventListener("keydown",h);
+  },[idx]);
+
+  return (
+    <div style={{ position:"fixed",inset:0,zIndex:500,background:"#000",display:"flex",flexDirection:"column" }} role="dialog" aria-modal="true" aria-label={`Full screen: ${post?.question}`}
+      onTouchStart={e=>{touchY.current=e.touches[0].clientY;}}
+      onTouchEnd={e=>{if(!touchY.current)return;const d=touchY.current-e.changedTouches[0].clientY;if(Math.abs(d)>50)go(d>0?1:-1);touchY.current=null;}}>
+      <div style={{ flex:1,position:"relative",overflow:"hidden",opacity:anim?0:1,transform:anim==="up"?"translateY(-30px)":anim==="down"?"translateY(30px)":"none",transition:"all .26s ease" }}>
+        {post?.type==="ab"&&post.images?(
+          <div style={{ display:"flex",height:"100%" }}>
+            {post.images.map((img,i)=>(
+              <div key={i} style={{ flex:1,position:"relative" }}>
+                <button onClick={()=>vote(i)} disabled={cur.voted!==null||isClosed} style={{ width:"100%",height:"100%",border:"none",padding:0,cursor:cur.voted!==null||isClosed?"default":"pointer",background:"transparent" }}>
+                  <img src={img} alt={`Option ${i+1}`} loading="lazy" style={{ width:"100%",height:"100%",objectFit:"cover",opacity:cur.voted!==null&&cur.voted!==i?0.45:1,transition:"opacity .2s" }}/>
+                </button>
+                {/* Fix #12: percentage on both options in full screen */}
+                {cur.voted!==null&&(
+                  <div style={{ position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",pointerEvents:"none" }}>
+                    <div style={{ background:cur.voted===i?"rgba(255,255,255,0.95)":"rgba(0,0,0,0.5)",borderRadius:14,padding:"12px 18px",textAlign:"center" }}>
+                      <div style={{ fontFamily:FONT,fontWeight:900,fontSize:28,color:cur.voted===i?B.pink:"#fff" }}>{Math.round((cur.v[i]/Math.max(total,1))*100)}%</div>
+                      {cur.voted===i&&<div style={{ fontFamily:FONT,fontSize:12,color:B.textMid,marginTop:3 }}>✓ Your vote</div>}
+                    </div>
+                  </div>
+                )}
+                <div style={{ position:"absolute",bottom:90,[i===0?"left":"right"]:14,pointerEvents:"none" }}>
+                  <div style={{ width:52,height:52,borderRadius:"50%",background:cur.voted===i?B.grad:"rgba(255,255,255,0.93)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 12px rgba(0,0,0,0.3)" }}>
+                    <span style={{ fontSize:9,fontWeight:900,color:cur.voted===i?"#fff":B.pink,fontFamily:FONT }}>Q</span>
+                    <span style={{ fontSize:10,fontWeight:800,color:cur.voted===i?"#fff":B.navy,fontFamily:FONT }}>{cur.voted!==null?`${Math.round((cur.v[i]/Math.max(total,1))*100)}%`:fmt(cur.v[i])}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ):(
+          <div style={{ width:"100%",height:"100%",background:post?.bg||B.grad,position:"relative",display:"flex",alignItems:"center",justifyContent:"center" }}>
+            {post?.images?.[0]&&<img src={post.images[0]} alt={post?.question||""} loading="lazy" style={{ width:"100%",height:"100%",objectFit:"cover",position:"absolute" }}/>}
+            <p style={{ position:"relative",padding:"0 32px",textAlign:"center",fontFamily:FONT,fontWeight:700,fontSize:22,color:"#fff",textShadow:"0 2px 8px rgba(0,0,0,0.4)",margin:0 }}>{post?.question}</p>
+            {!isClosed&&(<>
+              <button onClick={()=>vote(1)} disabled={cur.voted!==null} style={{ position:"absolute",bottom:120,left:20,width:64,height:64,borderRadius:"50%",background:B.grad,border:"none",cursor:cur.voted!==null?"default":"pointer",fontSize:28,boxShadow:"0 4px 20px rgba(0,0,0,0.4)",opacity:cur.voted!==null&&cur.voted!==1?0.4:1 }}>👎</button>
+              <button onClick={()=>vote(0)} disabled={cur.voted!==null} style={{ position:"absolute",bottom:120,right:20,width:64,height:64,borderRadius:"50%",background:B.grad,border:"none",cursor:cur.voted!==null?"default":"pointer",fontSize:28,boxShadow:"0 4px 20px rgba(0,0,0,0.4)",opacity:cur.voted!==null&&cur.voted!==0?0.4:1 }}>👍</button>
+            </>)}
+          </div>
+        )}
+        <div style={{ position:"absolute",top:0,left:0,right:0,height:160,background:"linear-gradient(to bottom,rgba(0,0,0,0.72),transparent)",pointerEvents:"none",padding:"50px 16px 0" }}>
+          <div style={{ display:"flex",alignItems:"center",gap:10,marginBottom:8 }}>
+            <div style={{ width:36,height:36,borderRadius:"50%",background:author.brandColor||B.grad,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:FONT,fontWeight:900,fontSize:14,color:"#fff" }}>{author.avatar}</div>
+            <div><div style={{ fontFamily:FONT,fontWeight:800,fontSize:14,color:"#fff" }}>{author.name}</div><div style={{ fontFamily:FONT,fontSize:11,color:"rgba(255,255,255,0.8)" }}>📍 {author.location}</div></div>
+            <div style={{ marginLeft:"auto" }}><Countdown endsAt={post?.endsAt||Date.now()}/></div>
+          </div>
+          <h2 style={{ fontFamily:FONT,fontWeight:700,fontSize:18,color:"#fff",textShadow:"0 1px 4px rgba(0,0,0,0.5)",margin:0 }}>{post?.question}</h2>
+        </div>
+        <div style={{ position:"absolute",bottom:64,left:16,pointerEvents:"none" }}>
+          <p style={{ fontFamily:FONT,fontSize:12,color:"rgba(255,255,255,0.8)",margin:0 }}>{post?.tags?.join(" ")}</p>
+        </div>
+        <button onClick={onClose} aria-label="Close" style={{ position:"absolute",top:14,right:14,background:"rgba(0,0,0,0.5)",border:"none",color:"#fff",borderRadius:"50%",width:36,height:36,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }}><Ic.Close/></button>
+        {idx>0&&<button onClick={()=>go(-1)} aria-label="Previous" style={{ position:"absolute",top:"50%",left:8,transform:"translateY(-50%)",background:"rgba(0,0,0,0.4)",border:"none",color:"#fff",borderRadius:"50%",width:34,height:34,cursor:"pointer",fontSize:14 }}>▲</button>}
+        {idx<posts.length-1&&<button onClick={()=>go(1)} aria-label="Next" style={{ position:"absolute",top:"50%",right:8,transform:"translateY(-50%)",background:"rgba(0,0,0,0.4)",border:"none",color:"#fff",borderRadius:"50%",width:34,height:34,cursor:"pointer",fontSize:14 }}>▼</button>}
+      </div>
+      <div style={{ padding:"8px 0 24px",display:"flex",justifyContent:"center",gap:6,background:"#000" }}>
+        {posts.map((_,i)=><div key={i} style={{ width:i===idx?22:6,height:6,borderRadius:3,background:i===idx?B.pink:"#444",transition:"all .2s" }}/>)}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FORMAT PICKER / CREATE POST / SHARE SHEET
+// ═══════════════════════════════════════════════════════════════════════════════
+function FormatPicker({ onSelect, onClose }) {
+  return (
+    <div style={{ position:"fixed",inset:0,zIndex:600,background:B.grad,display:"flex",flexDirection:"column" }} role="dialog" aria-modal="true">
+      <div style={{ padding:"18px 20px 12px",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0 }}>
+        <button onClick={onClose} style={{ background:"none",border:"none",color:"rgba(255,255,255,0.85)",fontSize:15,cursor:"pointer",fontFamily:FONT,fontWeight:700 }}>Cancel</button>
+        <Logo size={26} white/>
+        <div style={{ width:60 }}/>
+      </div>
+      <h2 style={{ fontFamily:FONT,fontWeight:900,fontSize:22,color:"#fff",margin:"0 0 16px",textAlign:"center",flexShrink:0 }}>Choose Poll Format</h2>
+      <div style={{ flex:1,overflowY:"auto",padding:"0 18px 40px" }}>
+        <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:12 }}>
+          {POLL_TYPES.map(f=>(
+            <button key={f.id} onClick={()=>onSelect(f.id)} aria-label={`Create ${f.label} poll`}
+              style={{ background:"rgba(255,255,255,0.15)",backdropFilter:"blur(10px)",border:"1.5px solid rgba(255,255,255,0.25)",borderRadius:18,padding:"18px 14px",cursor:"pointer",textAlign:"left",transition:"all .15s" }}>
+              <div style={{ fontSize:30,marginBottom:8 }}>{f.icon}</div>
+              <div style={{ fontFamily:FONT,fontWeight:800,fontSize:14,color:"#fff",marginBottom:4 }}>{f.label}</div>
+              <div style={{ fontFamily:FONT,fontSize:11,color:"rgba(255,255,255,0.75)",lineHeight:1.4 }}>{f.desc}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CreatePost({ format, user, onPublish, onClose }) {
+  const [question,setQuestion]=useState("");
+  const [tags,setTags]=useState("");
+  const [hours,setHours]=useState(24);
+  const [images,setImages]=useState([]);
+  const [bg,setBg]=useState(user.brandColor||"#F4C4C0");
+  const [textColor,setTextColor]=useState("#1A2154");
+  const [options,setOptions]=useState(["Option A","Option B","Option C"]);
+  const [dirty,setDirty]=useState(false);
+  const blobUrls=useRef([]);
+  const imgRef=useRef();
+  const ft=POLL_TYPES.find(t=>t.id===format)||POLL_TYPES[0];
+  const needsImages=["ab","image4","video"].includes(format);
+  const needsOptions=["multi","ranked"].includes(format);
+  const maxImg=format==="ab"?2:format==="image4"?4:1;
+  const bgs=["#F4C4C0","#C4DDF4","#D4F4C4","#F4ECC4","#E8C4F4","#1A2154","#000","#E8F5E9"];
+
+  useEffect(()=>{return()=>blobUrls.current.forEach(u=>URL.revokeObjectURL(u));},[]);
+
+  const handleImg=e=>{
+    const files=Array.from(e.target.files).slice(0,maxImg-images.length);
+    const ni=files.map(f=>{const url=URL.createObjectURL(f);blobUrls.current.push(url);return{url};});
+    setImages(imgs=>[...imgs,...ni].slice(0,maxImg));
+    setDirty(true);
+  };
+  const removeImg=i=>{URL.revokeObjectURL(images[i].url);blobUrls.current=blobUrls.current.filter(u=>u!==images[i].url);setImages(imgs=>imgs.filter((_,j)=>j!==i));};
+
+  const handleCancel=()=>{
+    if((dirty||question)&&!window.confirm("Discard this poll?"))return;
+    blobUrls.current.forEach(u=>URL.revokeObjectURL(u));
+    onClose();
+  };
+
+  const publish=()=>{
+    if(!question.trim())return;
+    blobUrls.current=[];
+    const baseVotes=needsOptions?options.map(()=>0):format==="slider"?Array(10).fill(0):[0,0];
+    onPublish({
+      id:uid(), type:format, authorId:"me", question,
+      tags:tags.split(/\s+/).filter(Boolean).map(t=>t.startsWith("#")?t:`#${t}`),
+      endsAt:Date.now()+hours*3600000,
+      images:images.length>0?images.map(i=>i.url):undefined,
+      bg, textColor,
+      options:needsOptions?options:undefined,
+      votes:baseVotes, userVote:null,
+      comments:[], reactions:{heart:0,fire:0,haha:0,wow:0,clap:0},
+      views:0, shares:0, trending:false,
+    });
+    onClose();
+  };
+
+  return (
+    <div style={{ position:"fixed",inset:0,zIndex:550,background:B.white,overflowY:"auto" }} role="dialog" aria-modal="true">
+      <div style={{ padding:"14px 18px",borderBottom:`1px solid ${B.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,background:B.white,zIndex:10 }}>
+        <button onClick={handleCancel} style={{ background:"none",border:"none",fontFamily:FONT,fontSize:15,color:B.textMid,cursor:"pointer" }}>Cancel</button>
+        <Logo size={24}/>
+        <button onClick={publish} disabled={!question.trim()} style={{ background:question.trim()?(user.brandColor?grad(user.brandColor,B.orange):B.grad):B.light,border:"none",borderRadius:20,padding:"8px 20px",fontFamily:FONT,fontWeight:800,fontSize:14,color:question.trim()?"#fff":B.textMid,cursor:question.trim()?"pointer":"not-allowed" }}>Post</button>
+      </div>
+      <div style={{ padding:"20px 20px 120px" }}>
+        <div style={{ display:"inline-flex",alignItems:"center",gap:8,background:user.brandColor?grad(user.brandColor,B.orange):B.grad,borderRadius:20,padding:"6px 16px",marginBottom:20 }}>
+          <span style={{ fontSize:16 }}>{ft.icon}</span>
+          <span style={{ color:"#fff",fontSize:13,fontWeight:800,fontFamily:FONT }}>{ft.label}</span>
+        </div>
+
+        <div style={{ marginBottom:16 }}>
+          <label htmlFor="cq" style={{ display:"block",fontFamily:FONT,fontWeight:700,fontSize:11,color:B.textMid,marginBottom:6,letterSpacing:0.8 }}>YOUR QUESTION</label>
+          <textarea id="cq" value={question} onChange={e=>{setQuestion(e.target.value);setDirty(true);}} placeholder="Ask something…" rows={3} style={{ width:"100%",border:`1.5px solid ${B.border}`,borderRadius:14,padding:"13px 15px",fontFamily:FONT,fontSize:15,color:B.navy,outline:"none",resize:"none",background:B.offWhite,boxSizing:"border-box" }}/>
+        </div>
+
+        {needsImages&&(
+          <div style={{ marginBottom:18 }}>
+            <p style={{ fontFamily:FONT,fontWeight:700,fontSize:11,color:B.textMid,marginBottom:8,marginTop:0,letterSpacing:0.8 }}>
+              {format==="ab"?"A vs B IMAGES (2 required)":format==="image4"?"4 OPTION IMAGES":"MEDIA"}
+            </p>
+            <div style={{ display:"flex",gap:10,flexWrap:"wrap" }}>
+              {images.map((img,i)=>(
+                <div key={i} style={{ width:90,height:90,borderRadius:14,overflow:"hidden",position:"relative",border:`1.5px solid ${B.border}` }}>
+                  <img src={img.url} alt={`Image ${i+1}`} loading="lazy" style={{ width:"100%",height:"100%",objectFit:"cover" }}/>
+                  <div style={{ position:"absolute",top:4,left:6,fontFamily:FONT,fontWeight:900,fontSize:11,color:"#fff",textShadow:"0 1px 3px rgba(0,0,0,0.8)" }}>{String.fromCharCode(65+i)}</div>
+                  <button onClick={()=>removeImg(i)} style={{ position:"absolute",top:4,right:4,background:"rgba(0,0,0,0.7)",border:"none",color:"#fff",borderRadius:"50%",width:20,height:20,cursor:"pointer",fontSize:11 }}>✕</button>
+                </div>
+              ))}
+              {images.length<maxImg&&<button onClick={()=>imgRef.current?.click()} style={{ width:90,height:90,borderRadius:14,border:`2px dashed ${user.brandColor||B.pink}`,background:B.offWhite,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4,color:user.brandColor||B.pink }}>
+                <span style={{ fontSize:26 }}>+</span><span style={{ fontFamily:FONT,fontSize:10,fontWeight:700 }}>Add</span>
+              </button>}
+              <input ref={imgRef} type="file" accept={format==="video"?"video/*":"image/*"} multiple style={{ display:"none" }} onChange={handleImg}/>
+            </div>
+          </div>
+        )}
+
+        {format==="text"&&(
+          <div style={{ marginBottom:18 }}>
+            <p style={{ fontFamily:FONT,fontWeight:700,fontSize:11,color:B.textMid,marginBottom:8,marginTop:0,letterSpacing:0.8 }}>BACKGROUND COLOR</p>
+            <div style={{ display:"flex",gap:10,flexWrap:"wrap",marginBottom:10 }}>{bgs.map(c=><button key={c} onClick={()=>setBg(c)} style={{ width:40,height:40,borderRadius:"50%",background:c,border:bg===c?`3px solid ${B.navy}`:`2px solid ${B.border}`,cursor:"pointer" }}/>)}</div>
+            <div style={{ display:"flex",gap:10,alignItems:"center" }}>
+              <span style={{ fontFamily:FONT,fontSize:12,color:B.textMid,fontWeight:600 }}>Text color:</span>
+              {["#1A2154","#FFFFFF","#E8407A","#F5A623"].map(c=><button key={c} onClick={()=>setTextColor(c)} style={{ width:30,height:30,borderRadius:"50%",background:c,border:textColor===c?`3px solid ${B.navy}`:`2px solid ${B.border}`,cursor:"pointer" }}/>)}
+            </div>
+          </div>
+        )}
+
+        {format==="slider"&&(
+          <div style={{ marginBottom:18,background:B.offWhite,borderRadius:14,padding:"14px 16px" }}>
+            <p style={{ fontFamily:FONT,fontWeight:700,fontSize:11,color:B.textMid,margin:"0 0 8px",letterSpacing:0.8 }}>SCALE PREVIEW</p>
+            <div style={{ display:"flex",justifyContent:"space-between" }}>
+              <span style={{ fontFamily:FONT,fontSize:12,color:B.textMid }}>1 — Low</span>
+              <span style={{ fontFamily:FONT,fontWeight:900,fontSize:20,color:user.brandColor||B.pink }}>1–10</span>
+              <span style={{ fontFamily:FONT,fontSize:12,color:B.textMid }}>10 — High</span>
+            </div>
+          </div>
+        )}
+
+        {needsOptions&&(
+          <div style={{ marginBottom:18 }}>
+            <p style={{ fontFamily:FONT,fontWeight:700,fontSize:11,color:B.textMid,marginBottom:8,marginTop:0,letterSpacing:0.8 }}>
+              {format==="ranked"?"OPTIONS TO RANK":"ANSWER OPTIONS"}
+            </p>
+            {options.map((opt,i)=>(
+              <div key={i} style={{ display:"flex",gap:8,marginBottom:8,alignItems:"center" }}>
+                <div style={{ width:28,height:28,borderRadius:8,background:B.grad,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:FONT,fontWeight:900,fontSize:12,color:"#fff",flexShrink:0 }}>{i+1}</div>
+                <input value={opt} onChange={e=>{const o=[...options];o[i]=e.target.value;setOptions(o);}} style={{ flex:1,border:`1.5px solid ${B.border}`,borderRadius:10,padding:"10px 12px",fontFamily:FONT,fontSize:13,color:B.navy,outline:"none",background:B.offWhite }}/>
+                {options.length>2&&<button onClick={()=>setOptions(o=>o.filter((_,j)=>j!==i))} style={{ background:"none",border:"none",color:B.textGray,cursor:"pointer",fontSize:18,padding:0,flexShrink:0 }}>✕</button>}
+              </div>
+            ))}
+            {options.length<(format==="ranked"?6:6)&&(
+              <button onClick={()=>setOptions(o=>[...o,`Option ${o.length+1}`])} style={{ width:"100%",padding:"10px 0",border:`1.5px dashed ${B.border}`,borderRadius:10,background:"transparent",fontFamily:FONT,fontSize:13,color:B.textMid,cursor:"pointer" }}>+ Add Option</button>
+            )}
+          </div>
+        )}
+
+        <div style={{ marginBottom:16 }}>
+          <label htmlFor="ct" style={{ display:"block",fontFamily:FONT,fontWeight:700,fontSize:11,color:B.textMid,marginBottom:6,letterSpacing:0.8 }}>HASHTAGS</label>
+          <input id="ct" value={tags} onChange={e=>setTags(e.target.value)} placeholder="#fashion #beauty" style={{ width:"100%",border:`1.5px solid ${B.border}`,borderRadius:14,padding:"12px 14px",fontFamily:FONT,fontSize:14,color:user.brandColor||B.pink,outline:"none",background:B.offWhite,boxSizing:"border-box" }}/>
+        </div>
+
+        <div style={{ marginBottom:20 }}>
+          <p style={{ fontFamily:FONT,fontWeight:700,fontSize:11,color:B.textMid,marginBottom:8,marginTop:0,letterSpacing:0.8 }}>POLL DURATION</p>
+          <div style={{ display:"flex",gap:8 }}>
+            {[1,6,12,24,48,72].map(h=><button key={h} onClick={()=>setHours(h)} aria-pressed={hours===h} style={{ flex:1,padding:"10px 0",borderRadius:10,border:`2px solid ${hours===h?user.brandColor||B.pink:B.border}`,background:hours===h?`${user.brandColor||B.pink}15`:B.offWhite,color:hours===h?user.brandColor||B.pink:B.textMid,fontFamily:FONT,fontWeight:700,fontSize:12,cursor:"pointer" }}>{h}h</button>)}
+          </div>
+        </div>
+
+        {question&&<div style={{ borderRadius:16,overflow:"hidden",border:`1.5px solid ${B.border}` }}>
+          <div style={{ padding:"8px 14px",background:B.offWhite,fontFamily:FONT,fontSize:11,fontWeight:700,color:B.textMid,letterSpacing:0.5 }}>PREVIEW</div>
+          <div style={{ background:format==="text"?bg:B.white,padding:"18px 16px",textAlign:"center",minHeight:70,display:"flex",alignItems:"center",justifyContent:"center" }}>
+            <p style={{ fontFamily:FONT,fontWeight:700,fontSize:15,color:format==="text"?textColor:B.navy,margin:0 }}>{question}</p>
+          </div>
+        </div>}
+      </div>
+    </div>
+  );
+}
+
+function ShareSheet({ post, onClose }) {
+  const [copied,setCopied]=useState(false);
+  const url=`https://quikix.com/q/${post?.id}`;
+  const handleCopy=()=>{try{navigator.clipboard.writeText(url);}catch{}setCopied(true);setTimeout(()=>setCopied(false),2000);};
+  return (
+    <div style={{ position:"fixed",inset:0,zIndex:700,background:"rgba(0,0,0,0.6)",display:"flex",alignItems:"flex-end" }} role="dialog" aria-modal="true" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div style={{ background:"#2C2C2E",borderRadius:"22px 22px 0 0",width:"100%",padding:"18px 20px 44px" }}>
+        <div style={{ width:40,height:4,background:"#555",borderRadius:2,margin:"0 auto 18px" }}/>
+        <h2 style={{ fontFamily:FONT,fontWeight:900,fontSize:20,color:"#fff",marginBottom:6,marginTop:0 }}>Share Poll</h2>
+        <p style={{ fontFamily:FONT,fontSize:13,color:"#aaa",marginBottom:20,wordBreak:"break-all",marginTop:0 }}>{url}</p>
+        {typeof navigator!=="undefined"&&navigator.share&&<button onClick={async()=>{try{await navigator.share({title:"Quikix",text:post?.question,url});onClose();}catch{}}} style={{ width:"100%",padding:"14px 0",background:B.grad,border:"none",borderRadius:14,fontFamily:FONT,fontWeight:800,fontSize:15,color:"#fff",cursor:"pointer",marginBottom:12 }}>Share via…</button>}
+        <div style={{ display:"flex",gap:14,overflowX:"auto",paddingBottom:8,marginBottom:18,scrollbarWidth:"none" }}>
+          {[["📋","Copy",handleCopy],["💬","SMS",null],["📘","Facebook",null],["🐦","X",null],["📸","Instagram",null],["✉️","Email",null]].map(([icon,label,action],i)=>(
+            <button key={i} onClick={action||undefined} style={{ display:"flex",flexDirection:"column",alignItems:"center",gap:6,background:"none",border:"none",cursor:"pointer",flexShrink:0 }}>
+              <div style={{ width:56,height:56,borderRadius:16,background:"#3A3A3C",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22 }}>{label==="Copy"&&copied?"✓":icon}</div>
+              <span style={{ fontFamily:FONT,fontSize:11,color:"#fff" }}>{label==="Copy"&&copied?"Copied!":label}</span>
+            </button>
+          ))}
+        </div>
+        <button onClick={onClose} style={{ width:"100%",padding:"16px 0",background:"#3A3A3C",border:"none",borderRadius:14,fontFamily:FONT,fontWeight:700,fontSize:16,color:"#fff",cursor:"pointer" }}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// WELCOME SCREEN
+// ═══════════════════════════════════════════════════════════════════════════════
+function WelcomeScreen({ user, onStart }) {
+  const { D } = useTheme();
+  return (
+    <div style={{ padding:"40px 24px",textAlign:"center",minHeight:"70vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center" }}>
+      <div style={{ fontSize:72,marginBottom:16 }}>👋</div>
+      <h2 style={{ fontFamily:FONT,fontWeight:900,fontSize:26,color:D.text,marginBottom:8,marginTop:0 }}>Welcome, {user.name?.split(" ")[0]||"friend"}!</h2>
+      <p style={{ fontFamily:FONT,fontSize:16,color:D.textMid,marginBottom:32,lineHeight:1.6,maxWidth:280,marginTop:0 }}>Quikix is the quickest way to hear what anyone has to say. Browse polls or create your first one!</p>
+      <div style={{ width:"100%",maxWidth:320,display:"flex",flexDirection:"column",gap:12,marginBottom:32 }}>
+        {[["🗳️","Vote on image polls","Tap an image to cast your vote instantly"],["📊","Create your own poll","Post A/B, Yes/No or text questions"],["📈","Track your results","See real-time analytics on every poll"]].map(([icon,title,desc])=>(
+          <div key={title} style={{ display:"flex",gap:14,alignItems:"flex-start",background:D.surface,borderRadius:16,padding:"14px 16px",textAlign:"left" }}>
+            <span style={{ fontSize:24,flexShrink:0 }}>{icon}</span>
+            <div><div style={{ fontFamily:FONT,fontWeight:800,fontSize:14,color:D.text,marginBottom:2 }}>{title}</div><div style={{ fontFamily:FONT,fontSize:12,color:D.textMid }}>{desc}</div></div>
+          </div>
+        ))}
+      </div>
+      <button onClick={onStart} style={{ padding:"16px 40px",borderRadius:50,background:user.brandColor?grad(user.brandColor,B.orange):B.grad,border:"none",fontFamily:FONT,fontWeight:900,fontSize:16,color:"#fff",cursor:"pointer",boxShadow:"0 8px 28px rgba(232,64,122,0.4)" }}>Explore Quikix →</button>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MESSAGES  (Fix #18: functional chat thread)
+// ═══════════════════════════════════════════════════════════════════════════════
+function MessagesPage() {
+  const { D } = useTheme();
+  const [active,setActive]=useState(null);
+  const [msgText,setMsgText]=useState("");
+  const [threads,setThreads]=useState({
+    hm:[{id:1,from:"hm",text:"Thanks for voting on our poll! 💕",time:"2m"},{id:2,from:"me",text:"Love your new collection!",time:"1m"}],
+    loreal:[{id:1,from:"loreal",text:"Check out our new foundation poll!",time:"1h"}],
+    fash:[{id:1,from:"fash",text:"Love your jeans poll 👖",time:"3h"}],
+  });
+  const convos=[{id:"hm",name:"H&M",avatar:"H",color:"#E50010",unread:2},{id:"loreal",name:"L'Oréal Paris",avatar:"L",color:"#C4A55A",unread:0},{id:"fash",name:"Fashionista",avatar:"F",color:B.purple,unread:1}];
+
+  const send=()=>{
+    if(!msgText.trim()||!active)return;
+    setThreads(t=>({...t,[active]:[...t[active],{id:Date.now(),from:"me",text:msgText,time:"Just now"}]}));
+    setMsgText("");
+  };
+
+  if(active){
+    const u=USERS[active]||USERS.me;
+    const msgs=threads[active]||[];
+    return (
+      <div style={{ display:"flex",flexDirection:"column",height:"calc(100vh - 56px - 72px)" }}>
+        <div style={{ padding:"12px 16px",borderBottom:`1px solid ${D.border}`,display:"flex",alignItems:"center",gap:12,background:D.card }}>
+          <button onClick={()=>setActive(null)} style={{ background:"none",border:"none",fontSize:20,cursor:"pointer",color:D.textMid }}>←</button>
+          <div style={{ width:38,height:38,borderRadius:"50%",background:u.brandColor,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:FONT,fontWeight:900,fontSize:14,color:"#fff" }}>{u.avatar}</div>
+          <div><div style={{ fontFamily:FONT,fontWeight:800,fontSize:15,color:D.text }}>{u.name}</div><div style={{ fontFamily:FONT,fontSize:11,color:B.green }}>● Active</div></div>
+        </div>
+        <div style={{ flex:1,overflowY:"auto",padding:"16px",display:"flex",flexDirection:"column",gap:10 }}>
+          {msgs.map(m=>{
+            const isMe=m.from==="me";
+            return (
+              <div key={m.id} style={{ display:"flex",justifyContent:isMe?"flex-end":"flex-start" }}>
+                <div style={{ maxWidth:"75%",background:isMe?u.brandColor:D.surface,color:isMe?"#fff":D.text,padding:"10px 14px",borderRadius:isMe?"18px 18px 4px 18px":"18px 18px 18px 4px",fontFamily:FONT,fontSize:14,lineHeight:1.4 }}>
+                  {m.text}
+                  <div style={{ fontSize:10,color:isMe?"rgba(255,255,255,0.7)":D.textGray,marginTop:3,textAlign:"right" }}>{m.time}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ padding:"12px 16px",borderTop:`1px solid ${D.border}`,display:"flex",gap:10,background:D.card }}>
+          <input value={msgText} onChange={e=>setMsgText(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()} placeholder="Message…" style={{ flex:1,border:`1.5px solid ${D.border}`,borderRadius:50,padding:"10px 16px",fontFamily:FONT,fontSize:14,outline:"none",background:D.surface,color:D.text }}/>
+          <button onClick={send} style={{ width:42,height:42,borderRadius:"50%",background:u.brandColor,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff" }}><Ic.Send/></button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ paddingBottom:100 }}>
+      <div style={{ padding:"18px 18px 12px",display:"flex",alignItems:"center",justifyContent:"space-between" }}>
+        <h2 style={{ fontFamily:FONT,fontWeight:900,fontSize:20,color:D.text,margin:0 }}>Messages</h2>
+        <button style={{ width:36,height:36,borderRadius:"50%",background:B.grad,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:18 }}>✎</button>
+      </div>
+      <div style={{ padding:"0 16px 14px" }}>
+        <input placeholder="Search messages…" style={{ width:"100%",border:`1.5px solid ${D.border}`,borderRadius:50,padding:"11px 16px",fontFamily:FONT,fontSize:14,color:D.text,outline:"none",background:D.surface,boxSizing:"border-box" }}/>
+      </div>
+      {convos.map(c=>(
+        <div key={c.id} onClick={()=>setActive(c.id)} style={{ display:"flex",gap:13,padding:"14px 18px",borderBottom:`1px solid ${D.border}`,cursor:"pointer",background:D.card }}>
+          <div style={{ width:50,height:50,borderRadius:"50%",background:c.color,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:FONT,fontWeight:900,fontSize:18,color:"#fff",flexShrink:0,position:"relative" }}>
+            {c.avatar}
+            {c.unread>0&&<div style={{ position:"absolute",top:0,right:0,width:18,height:18,background:B.pink,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",border:`2px solid ${D.card}` }}><span style={{ fontFamily:FONT,fontWeight:900,fontSize:9,color:"#fff" }}>{c.unread}</span></div>}
+          </div>
+          <div style={{ flex:1,minWidth:0 }}>
+            <div style={{ display:"flex",justifyContent:"space-between",marginBottom:4 }}>
+              <span style={{ fontFamily:FONT,fontWeight:800,fontSize:15,color:D.text }}>{c.name}</span>
+              <span style={{ fontFamily:FONT,fontSize:12,color:D.textGray }}>{(threads[c.id]||[]).slice(-1)[0]?.time||""}</span>
+            </div>
+            <div style={{ fontFamily:FONT,fontSize:13,color:c.unread>0?D.text:D.textGray,fontWeight:c.unread>0?700:400,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{(threads[c.id]||[]).slice(-1)[0]?.text||""}</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PROFILE
+// ═══════════════════════════════════════════════════════════════════════════════
+function ProfilePage({ user, posts, onEditBrand, onNavigate }) {
+  const { D, mode, toggle } = useTheme();
+  const [editOpen,setEditOpen]=useState(false);
+  const myPosts=useMemo(()=>posts.filter(p=>p.authorId==="me"),[posts]);
+  const totalVotes=useMemo(()=>myPosts.reduce((a,p)=>a+p.votes.reduce((x,y)=>x+(y||0),0),0),[myPosts]);
+  const isBiz=user.accountType==="business";
+  const userGrad=useMemo(()=>user.brandColor?grad(user.brandColor,B.orange):B.grad,[user.brandColor]);
+
+  return (
+    <div style={{ paddingBottom:100 }}>
+      <div style={{ height:140,background:user.bannerColor||B.grad,position:"relative" }}>
+        {isBiz&&<div style={{ position:"absolute",top:14,right:14,background:"rgba(0,0,0,0.4)",borderRadius:50,padding:"5px 12px" }}><span style={{ fontFamily:FONT,fontSize:11,fontWeight:800,color:"#fff" }}>🏢 Business</span></div>}
+        {/* Fix #28: Dark mode toggle on profile */}
+        <button onClick={toggle} aria-label={`Switch to ${mode==="dark"?"light":"dark"} mode`} style={{ position:"absolute",top:14,left:14,background:"rgba(0,0,0,0.4)",border:"none",borderRadius:50,padding:"7px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:6,color:"#fff" }}>
+          {mode==="dark"?<Ic.Sun/>:<Ic.Moon/>}
+          <span style={{ fontFamily:FONT,fontSize:11,fontWeight:700 }}>{mode==="dark"?"Light":"Dark"}</span>
+        </button>
+        <div style={{ position:"absolute",bottom:-44,left:"50%",transform:"translateX(-50%)" }}>
+          <div style={{ width:88,height:88,borderRadius:"50%",background:user.brandColor||B.grad,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:FONT,fontWeight:900,fontSize:30,color:"#fff",border:`4px solid ${D.card}`,boxShadow:B.shadowMd }}>{user.avatar||user.name?.[0]||"?"}</div>
+        </div>
+      </div>
+      <div style={{ height:52 }}/>
+      <div style={{ textAlign:"center",padding:"0 20px 20px" }}>
+        <div style={{ display:"flex",alignItems:"center",justifyContent:"center",gap:6,marginBottom:2 }}>
+          <h2 style={{ fontFamily:FONT,fontWeight:900,fontSize:22,color:D.text,margin:0 }}>{user.name}</h2>
+          {user.verified&&<span style={{ fontSize:16,color:user.brandColor||B.pink }}>✓</span>}
+        </div>
+        <div style={{ fontFamily:FONT,fontSize:13,color:D.textMid,marginBottom:6 }}>@{user.username}</div>
+        {user.bio&&<p style={{ fontFamily:FONT,fontSize:14,color:D.textMid,marginBottom:8,lineHeight:1.5,marginTop:0 }}>{user.bio}</p>}
+        {user.website&&<div style={{ fontFamily:FONT,fontSize:13,color:user.brandColor||B.pink,marginBottom:10 }}>🔗 {user.website}</div>}
+        <div style={{ display:"flex",gap:10,marginBottom:18 }}>
+          {[["Followers",fmt(user.followers||0)],["Following",user.following||0],["Quikix's",myPosts.length],["Votes",fmt(totalVotes)]].map(([l,v])=>(
+            <div key={l} style={{ flex:1,background:D.card,borderRadius:14,padding:"13px 6px",border:`1.5px solid ${D.border}`,boxShadow:B.shadow }}>
+              <div style={{ fontFamily:FONT,fontWeight:900,fontSize:18,color:D.text }}>{v}</div>
+              <div style={{ fontFamily:FONT,fontSize:11,color:D.textMid,marginTop:2 }}>{l}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ display:"flex",gap:10,marginBottom:20 }}>
+          <button style={{ flex:1,padding:"12px 0",borderRadius:50,background:userGrad,border:"none",fontFamily:FONT,fontWeight:800,fontSize:14,color:"#fff",cursor:"pointer" }}>Public Profile</button>
+          <button onClick={()=>setEditOpen(true)} style={{ flex:1,padding:"12px 0",borderRadius:50,background:D.card,border:`2px solid ${user.brandColor||B.pink}`,fontFamily:FONT,fontWeight:800,fontSize:14,color:user.brandColor||B.pink,cursor:"pointer" }}>Edit Profile</button>
+        </div>
+        {/* Fix 7 & 8: Navigation shortcuts to Dashboard + Analytics */}
+        <div style={{ display:"flex",gap:10,marginBottom:20 }}>
+          <button onClick={()=>onNavigate&&onNavigate("analytics")} style={{ flex:1,padding:"11px 0",borderRadius:50,background:D.surface,border:`1.5px solid ${D.border}`,fontFamily:FONT,fontWeight:700,fontSize:13,color:D.textMid,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:6 }}>
+            📊 Analytics
+          </button>
+          {isBiz&&<button onClick={()=>onNavigate&&onNavigate("business")} style={{ flex:1,padding:"11px 0",borderRadius:50,background:`${user.brandColor||B.pink}15`,border:`1.5px solid ${user.brandColor||B.pink}`,fontFamily:FONT,fontWeight:700,fontSize:13,color:user.brandColor||B.pink,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:6 }}>
+            🏢 Dashboard
+          </button>}
+        </div>
+
+        {/* Brand Kit */}
+        {isBiz&&(
+          <div style={{ background:D.surface,borderRadius:18,padding:16,marginBottom:20,border:`1.5px solid ${D.border}`,textAlign:"left" }}>
+            <div style={{ display:"flex",alignItems:"center",gap:8,marginBottom:14 }}>
+              <span style={{ fontSize:18 }}>🎨</span>
+              <h3 style={{ fontFamily:FONT,fontWeight:800,fontSize:15,color:D.text,margin:0 }}>Brand Kit</h3>
+            </div>
+            <div style={{ display:"flex",gap:12,alignItems:"center",marginBottom:14 }}>
+              <div style={{ width:40,height:40,borderRadius:10,background:user.brandColor||B.pink }}/>
+              <div><div style={{ fontFamily:FONT,fontWeight:700,fontSize:13,color:D.text }}>Brand Color</div><div style={{ fontFamily:FONT,fontSize:12,color:D.textMid }}>{user.brandColor||B.pink}</div></div>
+              <button onClick={()=>setEditOpen(true)} style={{ marginLeft:"auto",background:"none",border:`1.5px solid ${D.border}`,borderRadius:10,padding:"6px 12px",fontFamily:FONT,fontSize:12,fontWeight:700,color:D.text,cursor:"pointer" }}>Change</button>
+            </div>
+            {user.brandFont&&<div style={{ marginBottom:14 }}><div style={{ fontFamily:FONT,fontSize:11,color:D.textMid,fontWeight:700,marginBottom:4 }}>BRAND FONT</div><div style={{ fontFamily:user.brandFont,fontSize:16,color:D.text,fontWeight:600 }}>{user.brandFont} — The quick brown fox</div></div>}
+            <div style={{ display:"flex",gap:8 }}>{["Sponsored Posts","Analytics","Brand Insights"].map(f=><div key={f} style={{ flex:1,background:`${user.brandColor||B.pink}15`,borderRadius:10,padding:"8px 6px",textAlign:"center" }}><div style={{ fontFamily:FONT,fontSize:10,fontWeight:700,color:user.brandColor||B.pink }}>{f}</div></div>)}</div>
+          </div>
+        )}
+
+        {/* Upgrade CTA for personal */}
+        {!isBiz&&(
+          <div style={{ background:B.gradB,borderRadius:18,padding:"16px 18px",marginBottom:20,textAlign:"left" }}>
+            <div style={{ display:"flex",alignItems:"center",gap:10,marginBottom:8 }}>
+              <span style={{ fontSize:20 }}>🚀</span>
+              <h3 style={{ fontFamily:FONT,fontWeight:800,fontSize:15,color:"#fff",margin:0 }}>Upgrade to Business</h3>
+              <span style={{ background:B.grad,color:"#fff",fontFamily:FONT,fontSize:10,fontWeight:800,padding:"3px 10px",borderRadius:20,marginLeft:"auto" }}>PRO</span>
+            </div>
+            <p style={{ fontFamily:FONT,fontSize:13,color:"rgba(255,255,255,0.8)",marginBottom:14,marginTop:0,lineHeight:1.5 }}>Brand Kit, advanced analytics, sponsored posts & priority support</p>
+            <button style={{ padding:"10px 24px",borderRadius:50,background:B.grad,border:"none",fontFamily:FONT,fontWeight:800,fontSize:13,color:"#fff",cursor:"pointer",boxShadow:"0 4px 16px rgba(232,64,122,0.4)" }}>Upgrade Now →</button>
+          </div>
+        )}
+      </div>
+
+      {myPosts.length>0&&(
+        <div style={{ padding:"0 18px" }}>
+          <h3 style={{ fontFamily:FONT,fontWeight:800,fontSize:17,color:D.text,marginBottom:12 }}>My Quikix's</h3>
+          {myPosts.map(p=>(
+            <div key={p.id} style={{ background:D.card,borderRadius:14,padding:14,marginBottom:10,border:`1.5px solid ${D.border}`,boxShadow:B.shadow }}>
+              <div style={{ fontFamily:FONT,fontWeight:700,fontSize:14,color:D.text,marginBottom:6 }}>{p.question}</div>
+              {/* Fix #35: performance summary on creator's own posts */}
+              <div style={{ display:"flex",gap:14 }}>
+                <span style={{ fontFamily:FONT,fontSize:12,color:D.textMid }}>👍 {fmt(p.votes[0]+p.votes[1])} votes</span>
+                <span style={{ fontFamily:FONT,fontSize:12,color:D.textMid }}>👁 {fmt(p.views)} views</span>
+                {(p.votes[0]+p.votes[1])>100&&<span style={{ fontFamily:FONT,fontSize:12,color:B.green,fontWeight:700 }}>🔥 Top 10%</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Edit Profile */}
+      {editOpen&&(
+        <div style={{ position:"fixed",inset:0,zIndex:800,background:D.card,overflowY:"auto" }} role="dialog" aria-modal="true">
+          <div style={{ padding:"14px 18px",borderBottom:`1px solid ${D.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,background:D.card }}>
+            <button onClick={()=>setEditOpen(false)} style={{ background:"none",border:"none",color:D.textMid,fontSize:15,cursor:"pointer" }}>Cancel</button>
+            <Logo size={24}/>
+            <button onClick={()=>setEditOpen(false)} style={{ background:userGrad,border:"none",borderRadius:20,padding:"8px 18px",fontFamily:FONT,fontWeight:800,fontSize:14,color:"#fff",cursor:"pointer" }}>Save</button>
+          </div>
+          <div style={{ padding:"24px 20px 80px" }}>
+            <h2 style={{ fontFamily:FONT,fontWeight:800,fontSize:20,color:D.text,marginBottom:20,marginTop:0 }}>Edit Profile</h2>
+            {[["Full Name","name","name"],["Username","username","username"],["Bio","bio",""],["Location","location",""],["Website","website","url"]].map(([l,k,ac])=>(
+              <div key={k} style={{ marginBottom:14 }}>
+                <label htmlFor={`ep-${k}`} style={{ display:"block",fontFamily:FONT,fontWeight:700,fontSize:11,color:D.textMid,marginBottom:5,letterSpacing:0.8 }}>{l.toUpperCase()}</label>
+                <input id={`ep-${k}`} defaultValue={user[k]||""} autoComplete={ac||"off"} style={{ width:"100%",border:`1.5px solid ${D.border}`,borderRadius:14,padding:"12px 14px",fontFamily:FONT,fontSize:14,color:D.text,outline:"none",background:D.surface,boxSizing:"border-box" }}/>
+              </div>
+            ))}
+            <p style={{ fontFamily:FONT,fontWeight:700,fontSize:11,color:D.textMid,marginBottom:10,letterSpacing:0.8 }}>BRAND COLOR</p>
+            <div style={{ display:"flex",gap:10,flexWrap:"wrap",marginBottom:20 }}>
+              {["#E8407A","#F5A623","#2979FF","#7C4DFF","#00C853","#FF3B30","#1A2154","#FF6B6B","#00BCD4","#E50010"].map(c=>(
+                <button key={c} onClick={()=>onEditBrand&&onEditBrand(c)} style={{ width:44,height:44,borderRadius:"50%",background:c,border:user.brandColor===c?`3px solid ${D.text}`:`2px solid transparent`,cursor:"pointer",transition:"all .15s" }}/>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ANALYTICS  (Fix #23: only render active tab content)
+// ═══════════════════════════════════════════════════════════════════════════════
+function AnalyticsPage({ user, posts }) {
+  const [atab,setAtab]=useState("dashboard");
+  const [period,setPeriod]=useState("7d");
+  const { D } = useTheme();
+  const d=ANALYTICS;
+  const myPosts=useMemo(()=>posts.filter(p=>p.authorId==="me"),[posts]);
+  const realVotes=useMemo(()=>myPosts.reduce((a,p)=>a+p.votes[0]+p.votes[1],0),[myPosts]);
+  const userGrad=useMemo(()=>user.brandColor?grad(user.brandColor,B.orange):B.grad,[user.brandColor]);
+
+  return (
+    <div>
+      <nav style={{ display:"flex",borderBottom:`1.5px solid ${D.border}`,marginBottom:18 }}>
+        {[{id:"dashboard",icon:"📊",label:"Dashboard"},{id:"audience",icon:"👥",label:"Audience"},{id:"insights",icon:"💡",label:"Insights"}].map(t=>(
+          <button key={t.id} onClick={()=>setAtab(t.id)} role="tab" aria-selected={atab===t.id} style={{ flex:1,padding:"10px 4px",border:"none",borderBottom:`2.5px solid ${atab===t.id?user.brandColor||B.pink:"transparent"}`,background:"transparent",fontFamily:FONT,fontWeight:atab===t.id?800:600,fontSize:12,color:atab===t.id?user.brandColor||B.pink:D.textMid,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:2 }}>
+            <span style={{ fontSize:15 }}>{t.icon}</span><span>{t.label}</span>
+          </button>
+        ))}
+      </nav>
+
+      {/* Fix #23: only render active tab */}
+      {atab==="dashboard"&&(
+        <div>
+          <div style={{ background:userGrad,borderRadius:20,padding:20,marginBottom:18,display:"flex",alignItems:"center",justifyContent:"space-between" }}>
+            <div>
+              <div style={{ fontFamily:FONT,fontWeight:700,fontSize:12,color:"rgba(255,255,255,0.8)",marginBottom:4 }}>QUIKIX SCORE</div>
+              <div style={{ fontFamily:FONT,fontWeight:900,fontSize:14,color:"#fff",marginBottom:10 }}>86% above industry average!</div>
+              <span style={{ background:"rgba(255,255,255,0.2)",borderRadius:50,padding:"4px 12px",fontFamily:FONT,fontWeight:700,fontSize:11,color:"#fff" }}>🔥 Excellent</span>
+            </div>
+            <ScoreRing score={d.overview.score} label={d.overview.scoreLabel}/>
+          </div>
+          <div style={{ display:"flex",background:D.surface,borderRadius:50,padding:3,marginBottom:16 }}>
+            {["7d","30d","90d"].map(p=><button key={p} onClick={()=>setPeriod(p)} style={{ flex:1,padding:"7px 0",borderRadius:50,border:"none",background:period===p?D.card:"transparent",color:period===p?D.text:D.textMid,fontFamily:FONT,fontWeight:700,fontSize:12,cursor:"pointer",boxShadow:period===p?B.shadow:"none",transition:"all .2s" }}>{p}</button>)}
+          </div>
+          <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:18 }}>
+            {[["👍","My Votes",realVotes>0?fmt(realVotes):fmt(d.overview.totalVotes),`+${d.overview.totalVotesChange}%`,B.pink,d.votes7d],["👁","Reach",fmt(d.overview.totalReach),`+${d.overview.totalReachChange}%`,B.blue,d.reach7d],["⚡","Eng. Rate",`${d.overview.engagementRate}%`,`+${d.overview.engagementRateChange}%`,B.orange,null],["👥","Followers",fmt(d.overview.followers),`+${d.overview.followersChange}`,B.purple,d.followers7d]].map(([icon,label,val,change,color,spark])=>(
+              <div key={label} style={{ background:D.card,borderRadius:18,padding:"14px 14px 10px",border:`1.5px solid ${D.border}`,boxShadow:B.shadow,overflow:"hidden" }}>
+                <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6 }}>
+                  <div><div style={{ fontFamily:FONT,fontSize:11,color:D.textMid,fontWeight:700,marginBottom:3 }}>{label}</div><div style={{ fontFamily:FONT,fontWeight:900,fontSize:22,color:D.text,lineHeight:1 }}>{val}</div></div>
+                  <div style={{ width:32,height:32,borderRadius:10,background:`${color}18`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16 }}>{icon}</div>
+                </div>
+                {spark&&<div style={{ marginBottom:4 }}><Sparkline data={spark} color={color} height={28}/></div>}
+                <div style={{ fontFamily:FONT,fontSize:11,fontWeight:800,color:B.green }}>{change} vs last period</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ background:D.card,borderRadius:18,padding:"16px 14px",border:`1.5px solid ${D.border}`,boxShadow:B.shadow,marginBottom:14 }}>
+            <h3 style={{ fontFamily:FONT,fontWeight:800,fontSize:15,color:D.text,marginBottom:12,marginTop:0 }}>Votes Over Time</h3>
+            <Sparkline data={d.votes7d} color={user.brandColor||B.pink} height={80}/>
+            <div style={{ display:"flex",justifyContent:"space-between",marginTop:6 }}>
+              {["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(l=><span key={l} style={{ fontFamily:FONT,fontSize:9,color:D.textMid }}>{l}</span>)}
+            </div>
+          </div>
+          <div style={{ background:D.card,borderRadius:18,padding:"16px 14px",border:`1.5px solid ${D.border}`,boxShadow:B.shadow }}>
+            <h3 style={{ fontFamily:FONT,fontWeight:800,fontSize:15,color:D.text,marginBottom:12,marginTop:0 }}>Top Hashtags</h3>
+            {d.hashtags.map((h,i)=>(
+              <div key={i} style={{ display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:i<d.hashtags.length-1?`1px solid ${D.border}`:"none" }}>
+                <div style={{ width:26,height:26,borderRadius:8,background:`${user.brandColor||B.pink}18`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:FONT,fontWeight:900,fontSize:11,color:user.brandColor||B.pink,flexShrink:0 }}>{i+1}</div>
+                <div style={{ flex:1 }}><div style={{ fontFamily:FONT,fontWeight:700,fontSize:13,color:D.text }}>{h.tag}</div><div style={{ height:3,background:D.surface,borderRadius:2,marginTop:3 }}><div style={{ height:"100%",width:`${(h.votes/d.hashtags[0].votes)*100}%`,background:user.brandColor||B.grad,borderRadius:2 }}/></div></div>
+                <div style={{ textAlign:"right" }}><div style={{ fontFamily:FONT,fontWeight:800,fontSize:12,color:D.text }}>{fmt(h.votes)}</div><div style={{ fontFamily:FONT,fontSize:11,color:B.green,fontWeight:700 }}>{h.growth}</div></div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {atab==="audience"&&(
+        <div>
+          {[
+            {title:"Gender",content:<div style={{ display:"flex",alignItems:"center",gap:16 }}><DonutChart data={d.audience.gender} size={110}/><div style={{ flex:1 }}>{d.audience.gender.map(g=><div key={g.label} style={{ display:"flex",alignItems:"center",gap:8,marginBottom:10 }}><div style={{ width:11,height:11,borderRadius:"50%",background:g.color,flexShrink:0 }}/><span style={{ fontFamily:FONT,fontSize:13,color:D.text,fontWeight:600,flex:1 }}>{g.label}</span><span style={{ fontFamily:FONT,fontSize:14,fontWeight:800,color:D.text }}>{g.value}%</span></div>)}</div></div>},
+            {title:"Age Distribution",content:<div>{d.audience.age.map(a=><div key={a.label} style={{ display:"flex",alignItems:"center",gap:10,marginBottom:10 }}><div style={{ fontFamily:FONT,fontSize:11,fontWeight:700,color:D.textMid,width:36 }}>{a.label}</div><div style={{ flex:1,height:9,background:D.surface,borderRadius:4,overflow:"hidden" }}><div style={{ height:"100%",width:`${a.value}%`,background:a.color,borderRadius:4 }}/></div><div style={{ fontFamily:FONT,fontSize:12,fontWeight:800,color:D.text,width:28 }}>{a.value}%</div></div>)}</div>},
+            {title:"Best Time to Post",content:<div><p style={{ fontFamily:FONT,fontSize:11,color:D.textMid,fontWeight:600,marginBottom:8,marginTop:0 }}>BY HOUR</p><BarChart data={d.audience.peakHours} height={80}/><p style={{ fontFamily:FONT,fontSize:11,color:D.textMid,fontWeight:600,marginTop:14,marginBottom:8 }}>BY DAY</p><BarChart data={d.audience.peakDays} height={80}/><div style={{ marginTop:12,background:`${B.green}15`,borderRadius:12,padding:"10px 14px",display:"flex",gap:10,alignItems:"center" }}><span style={{ fontSize:18 }}>💡</span><span style={{ fontFamily:FONT,fontSize:13,color:D.text,fontWeight:600 }}>Post on <strong>Saturday at 6–9 PM</strong> for max reach</span></div></div>},
+            {title:"Top Locations",content:<div>{d.audience.topLocations.map((l,i)=><div key={i} style={{ display:"flex",alignItems:"center",gap:10,padding:"9px 0",borderBottom:i<d.audience.topLocations.length-1?`1px solid ${D.border}`:"none" }}><div style={{ width:26,height:26,borderRadius:8,background:`${user.brandColor||B.pink}18`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:FONT,fontWeight:900,fontSize:11,color:user.brandColor||B.pink,flexShrink:0 }}>{i+1}</div><div style={{ flex:1 }}><div style={{ fontFamily:FONT,fontWeight:700,fontSize:13,color:D.text }}>{l.city}</div><div style={{ fontFamily:FONT,fontSize:11,color:D.textMid }}>{l.country}</div></div><div style={{ fontFamily:FONT,fontWeight:800,fontSize:13,color:D.text }}>{l.pct}%</div></div>)}</div>},
+          ].map(s=>(
+            <div key={s.title} style={{ background:D.card,borderRadius:18,padding:"16px 14px",border:`1.5px solid ${D.border}`,boxShadow:B.shadow,marginBottom:14 }}>
+              <h3 style={{ fontFamily:FONT,fontWeight:800,fontSize:15,color:D.text,marginBottom:14,marginTop:0 }}>{s.title}</h3>
+              {s.content}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {atab==="insights"&&(
+        <div>
+          <div style={{ background:B.gradB,borderRadius:20,padding:"20px 18px",marginBottom:16 }}>
+            <h3 style={{ fontFamily:FONT,fontWeight:900,fontSize:16,color:"#fff",marginBottom:8,marginTop:0 }}>📊 vs Industry Benchmarks</h3>
+            <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:10 }}>
+              {[["Industry Avg ER","4.2%"],["Your ER","7.8%"],["Avg Completion","68%"],["Your Completion","84%"]].map(([l,v],i)=>(
+                <div key={l} style={{ background:"rgba(255,255,255,0.1)",borderRadius:12,padding:"10px 12px" }}>
+                  <div style={{ fontFamily:FONT,fontSize:10,color:"rgba(255,255,255,0.6)",marginBottom:2 }}>{l}</div>
+                  <div style={{ fontFamily:FONT,fontWeight:900,fontSize:20,color:i%2===1?"#00FF87":"rgba(255,255,255,0.65)" }}>{v}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          {d.insights.map((ins,i)=>(
+            <div key={i} style={{ background:D.card,borderRadius:16,padding:"14px 16px",border:`1.5px solid ${ins.color}28`,boxShadow:B.shadow,marginBottom:12,borderLeft:`4px solid ${ins.color}` }}>
+              <div style={{ display:"flex",alignItems:"flex-start",gap:12 }}>
+                <div style={{ width:38,height:38,borderRadius:10,background:`${ins.color}18`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0 }}>{ins.icon}</div>
+                <div style={{ flex:1 }}><h4 style={{ fontFamily:FONT,fontWeight:800,fontSize:14,color:D.text,marginBottom:4,marginTop:0 }}>{ins.title}</h4><p style={{ fontFamily:FONT,fontSize:13,color:D.textMid,lineHeight:1.5,margin:0 }}>{ins.body}</p></div>
+              </div>
+            </div>
+          ))}
+          {user.accountType==="business"&&(
+            <div style={{ background:D.surface,borderRadius:18,padding:"16px 14px",border:`1.5px solid ${D.border}` }}>
+              <div style={{ display:"flex",alignItems:"center",gap:8,marginBottom:14 }}>
+                <span style={{ fontSize:18 }}>🏢</span>
+                <h3 style={{ fontFamily:FONT,fontWeight:800,fontSize:15,color:D.text,margin:0 }}>Business Intelligence</h3>
+                <span style={{ background:B.grad,color:"#fff",fontFamily:FONT,fontSize:10,fontWeight:800,padding:"3px 10px",borderRadius:20,marginLeft:"auto" }}>PRO</span>
+              </div>
+              {[["Audience Fit Score","92/100 — Perfect for fashion & beauty"],["Response Time","Avg 4.2 hrs to 80% of votes"],["Brand Safety","✓ All clear"],["Est. Media Value","~$2,400 this month"]].map(([l,v])=>(
+                <div key={l} style={{ padding:"10px 0",borderBottom:`1px solid ${D.border}` }}>
+                  <div style={{ fontFamily:FONT,fontSize:10,color:D.textMid,fontWeight:700,marginBottom:2 }}>{l.toUpperCase()}</div>
+                  <div style={{ fontFamily:FONT,fontSize:14,color:D.text,fontWeight:700 }}>{v}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GAMIFICATION PAGE — XP, Leaderboard, Achievements, Levels
+// ═══════════════════════════════════════════════════════════════════════════════
+function GamificationPage() {
+  const { xp, level } = useXP();
+  const { D } = useTheme();
+  const [gtab, setGtab] = useState("leaderboard");
+  const nextLevel = LEVELS.find(l=>l.min>xp) || LEVELS[LEVELS.length-1];
+  const progress = nextLevel.min===Infinity ? 100 : pct(xp-level.min, nextLevel.min-level.min);
+  const xpToNext = nextLevel.min===Infinity ? 0 : nextLevel.min-xp;
+
+  return (
+    <div style={{ paddingBottom:100 }}>
+      {/* XP Hero */}
+      <div style={{ background:B.grad,padding:"24px 20px 28px",position:"relative",overflow:"hidden" }}>
+        <div style={{ position:"absolute",top:-40,right:-40,width:180,height:180,borderRadius:"50%",background:"rgba(255,255,255,0.07)",pointerEvents:"none" }}/>
+        <div style={{ position:"absolute",bottom:-30,left:-20,width:120,height:120,borderRadius:"50%",background:"rgba(255,255,255,0.05)",pointerEvents:"none" }}/>
+        <div style={{ display:"flex",alignItems:"center",gap:16,marginBottom:18,position:"relative" }}>
+          <div style={{ width:64,height:64,borderRadius:"50%",background:"rgba(255,255,255,0.2)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:32,flexShrink:0 }}>{level.icon}</div>
+          <div style={{ flex:1 }}>
+            <div style={{ fontFamily:FONT,fontWeight:900,fontSize:20,color:"#fff",marginBottom:2 }}>{level.label}</div>
+            <div style={{ fontFamily:FONT,fontSize:13,color:"rgba(255,255,255,0.8)" }}>
+              {fmt(xp)} XP total{xpToNext>0?` · ${fmt(xpToNext)} XP to next level`:" · MAX LEVEL 👑"}
+            </div>
+          </div>
+          <div style={{ fontFamily:FONT,fontWeight:900,fontSize:28,color:"#fff" }}>{fmt(xp)}</div>
+        </div>
+        <div style={{ background:"rgba(255,255,255,0.2)",borderRadius:8,height:10,marginBottom:6,position:"relative" }}>
+          <div style={{ height:"100%",width:`${progress}%`,background:"rgba(255,255,255,0.9)",borderRadius:8,transition:"width .6s ease" }}/>
+        </div>
+        <div style={{ display:"flex",justifyContent:"space-between" }}>
+          <span style={{ fontFamily:FONT,fontSize:11,color:"rgba(255,255,255,0.7)" }}>{level.label} ({fmt(level.min)} XP)</span>
+          <span style={{ fontFamily:FONT,fontSize:11,color:"rgba(255,255,255,0.7)" }}>{nextLevel.label} ({fmt(nextLevel.min)} XP)</span>
+        </div>
+      </div>
+
+      {/* How to earn XP */}
+      <div style={{ background:D.card,borderBottom:`1px solid ${D.border}`,padding:"12px 16px" }}>
+        <div style={{ fontFamily:FONT,fontWeight:700,fontSize:11,color:D.textMid,marginBottom:8,letterSpacing:0.8 }}>HOW TO EARN XP</div>
+        <div style={{ display:"flex",gap:10,overflowX:"auto",scrollbarWidth:"none" }}>
+          {[["🗳️","Vote","+10"],["📊","Create","+25"],["💬","Comment","+5"],["🔥","Trending","+100"],["👥","Follower","+2"],["🏆","Ranked","+15"]].map(([icon,label,xpAmt])=>(
+            <div key={label} style={{ background:D.surface,border:`1px solid ${D.border}`,borderRadius:12,padding:"8px 12px",textAlign:"center",minWidth:72,flexShrink:0 }}>
+              <div style={{ fontSize:18,marginBottom:3 }}>{icon}</div>
+              <div style={{ fontFamily:FONT,fontSize:10,color:D.text,fontWeight:700 }}>{label}</div>
+              <div style={{ fontFamily:FONT,fontSize:10,color:B.green,fontWeight:800 }}>{xpAmt} XP</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Sub-tabs */}
+      <div style={{ display:"flex",borderBottom:`1px solid ${D.border}`,background:D.card }}>
+        {[["leaderboard","🏆 Board"],["achievements","🎖️ Badges"],["levels","⭐ Levels"]].map(([id,label])=>(
+          <button key={id} onClick={()=>setGtab(id)} style={{ flex:1,padding:"12px 4px",border:"none",borderBottom:`2.5px solid ${gtab===id?B.pink:"transparent"}`,background:"transparent",fontFamily:FONT,fontWeight:gtab===id?800:600,fontSize:12,color:gtab===id?B.pink:D.textMid,cursor:"pointer" }}>{label}</button>
+        ))}
+      </div>
+
+      {gtab==="leaderboard"&&(
+        <div style={{ padding:"16px" }}>
+          {LEADERBOARD.map((u,i)=>(
+            <div key={u.rank} style={{ display:"flex",alignItems:"center",gap:12,padding:"12px 14px",background:u.isMe?`${B.pink}10`:D.card,borderRadius:14,marginBottom:10,border:`1.5px solid ${u.isMe?B.pink:D.border}`,boxShadow:B.shadow }}>
+              <div style={{ width:36,height:36,borderRadius:12,background:i===0?B.gold:i===1?B.silver:i===2?B.bronze:D.border,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:FONT,fontWeight:900,fontSize:i<3?18:14,color:i<3?"#fff":D.textMid,flexShrink:0 }}>{u.badge||`#${u.rank}`}</div>
+              <div style={{ width:42,height:42,borderRadius:"50%",background:u.color,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:FONT,fontWeight:900,fontSize:16,color:"#fff",flexShrink:0 }}>{u.avatar}</div>
+              <div style={{ flex:1 }}>
+                <div style={{ fontFamily:FONT,fontWeight:800,fontSize:15,color:D.text }}>
+                  {u.name}{u.isMe&&<span style={{ fontFamily:FONT,fontSize:11,color:B.pink,fontWeight:700,marginLeft:6 }}>← You</span>}
+                </div>
+                <div style={{ fontFamily:FONT,fontSize:12,color:D.textMid }}>{fmt(u.votes)} votes cast</div>
+              </div>
+              <div style={{ fontFamily:FONT,fontWeight:900,fontSize:18,color:i===0?B.gold:i===1?B.silver:i===2?B.bronze:D.text }}>#{u.rank}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {gtab==="achievements"&&(
+        <div style={{ padding:"16px" }}>
+          <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:12 }}>
+            {ACHIEVEMENTS.map(a=>(
+              <div key={a.id} style={{ background:a.earned?D.card:D.surface,borderRadius:18,padding:"16px 14px",border:`1.5px solid ${a.earned?B.gold+"55":D.border}`,boxShadow:a.earned?`0 4px 16px ${B.gold}22`:B.shadow,opacity:a.earned?1:0.55,textAlign:"center" }}>
+                <div style={{ fontSize:32,marginBottom:8,filter:a.earned?"none":"grayscale(1)" }}>{a.icon}</div>
+                <div style={{ fontFamily:FONT,fontWeight:800,fontSize:13,color:D.text,marginBottom:4 }}>{a.title}</div>
+                <div style={{ fontFamily:FONT,fontSize:11,color:D.textMid,marginBottom:8,lineHeight:1.4 }}>{a.desc}</div>
+                <div style={{ display:"inline-flex",alignItems:"center",gap:4,background:a.earned?`${B.gold}22`:D.border,borderRadius:50,padding:"4px 10px" }}>
+                  <span style={{ fontSize:11 }}>⭐</span>
+                  <span style={{ fontFamily:FONT,fontWeight:800,fontSize:11,color:a.earned?B.gold:D.textGray }}>{a.xp} XP</span>
+                </div>
+                {a.earned&&<div style={{ fontFamily:FONT,fontSize:10,color:B.green,fontWeight:700,marginTop:6 }}>✓ Earned</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {gtab==="levels"&&(
+        <div style={{ padding:"16px" }}>
+          {LEVELS.map((l,i)=>{
+            const reached=xp>=l.min;
+            const isCurrent=xp>=l.min&&xp<=l.max;
+            return (
+              <div key={l.label} style={{ display:"flex",alignItems:"center",gap:14,padding:"14px 16px",background:isCurrent?`${l.color}14`:D.card,borderRadius:16,marginBottom:10,border:`1.5px solid ${isCurrent?l.color+"55":D.border}`,opacity:reached?1:0.45 }}>
+                <div style={{ width:52,height:52,borderRadius:"50%",background:reached?l.color:D.border,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,flexShrink:0 }}>{l.icon}</div>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontFamily:FONT,fontWeight:800,fontSize:15,color:D.text,marginBottom:2 }}>{l.label}</div>
+                  <div style={{ fontFamily:FONT,fontSize:12,color:D.textMid }}>{fmt(l.min)} XP{l.max!==Infinity?` — ${fmt(l.max)} XP`:""}</div>
+                </div>
+                {isCurrent&&<div style={{ background:l.color,borderRadius:50,padding:"4px 12px",fontFamily:FONT,fontWeight:800,fontSize:11,color:"#fff" }}>Current</div>}
+                {reached&&!isCurrent&&<div style={{ fontSize:20,color:B.green }}>✓</div>}
+                {!reached&&<div style={{ fontFamily:FONT,fontSize:11,color:D.textGray }}>{fmt(l.min-xp)} XP away</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BUSINESS DASHBOARD
+// ═══════════════════════════════════════════════════════════════════════════════
+function BusinessDashboard({ user }) {
+  const { D } = useTheme();
+  const [btab, setBtab] = useState("overview");
+  const d = ANALYTICS;
+  const ac = user.brandColor||B.pink;
+  const userGrad = useMemo(()=>user.brandColor?grad(user.brandColor,B.orange):B.grad,[user.brandColor]);
+
+  const StatusBadge = ({status}) => {
+    const cfg = {active:{bg:`${B.green}18`,color:B.green,label:"● Live"},draft:{bg:`${B.orange}18`,color:B.orange,label:"◯ Draft"},closed:{bg:`${D.border}`,color:D.textGray,label:"✕ Ended"}};
+    const c = cfg[status]||cfg.closed;
+    return <span style={{ fontFamily:FONT,fontWeight:700,fontSize:11,color:c.color,background:c.bg,padding:"3px 9px",borderRadius:50 }}>{c.label}</span>;
+  };
+
+  return (
+    <div style={{ paddingBottom:100 }}>
+      {/* Hero banner */}
+      <div style={{ background:userGrad,padding:"20px 18px 22px",position:"relative",overflow:"hidden" }}>
+        <div style={{ position:"absolute",top:-40,right:-40,width:160,height:160,borderRadius:"50%",background:"rgba(255,255,255,0.08)",pointerEvents:"none" }}/>
+        <div style={{ display:"flex",alignItems:"center",gap:12,marginBottom:16,position:"relative" }}>
+          <div style={{ width:52,height:52,borderRadius:14,background:"rgba(255,255,255,0.2)",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:FONT,fontWeight:900,fontSize:22,color:"#fff",flexShrink:0 }}>{user.avatar}</div>
+          <div>
+            <div style={{ fontFamily:FONT,fontWeight:900,fontSize:18,color:"#fff" }}>{user.name}</div>
+            <div style={{ fontFamily:FONT,fontSize:12,color:"rgba(255,255,255,0.8)" }}>Business Dashboard · {user.location}</div>
+          </div>
+          <div style={{ marginLeft:"auto",background:"rgba(255,255,255,0.2)",borderRadius:50,padding:"5px 12px",fontFamily:FONT,fontWeight:800,fontSize:11,color:"#fff" }}>🏢 PRO</div>
+        </div>
+        <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,position:"relative" }}>
+          {[["💰","Revenue",`$${fmt(d.overview.revenue)}`,`+${d.overview.revenueChange}%`],["👁","Reach",fmt(d.overview.totalReach),`+${d.overview.totalReachChange}%`],["⚡","Eng.",`${d.overview.engagementRate}%`,`+${d.overview.engagementRateChange}%`]].map(([icon,label,val,change])=>(
+            <div key={label} style={{ background:"rgba(255,255,255,0.15)",borderRadius:12,padding:"10px" }}>
+              <div style={{ fontFamily:FONT,fontSize:10,color:"rgba(255,255,255,0.7)",marginBottom:2 }}>{icon} {label}</div>
+              <div style={{ fontFamily:FONT,fontWeight:900,fontSize:18,color:"#fff" }}>{val}</div>
+              <div style={{ fontFamily:FONT,fontSize:10,color:"#00FF87",fontWeight:700 }}>{change}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div style={{ display:"flex",borderBottom:`1px solid ${D.border}`,background:D.card,overflowX:"auto",scrollbarWidth:"none" }}>
+        {[["overview","📊 Overview"],["campaigns","🎯 Campaigns"],["audience","👥 Audience"],["insights","💡 Insights"]].map(([id,label])=>(
+          <button key={id} onClick={()=>setBtab(id)} style={{ flexShrink:0,padding:"12px 14px",border:"none",borderBottom:`2.5px solid ${btab===id?ac:"transparent"}`,background:"transparent",fontFamily:FONT,fontWeight:btab===id?800:600,fontSize:12,color:btab===id?ac:D.textMid,cursor:"pointer",whiteSpace:"nowrap" }}>{label}</button>
+        ))}
+      </div>
+
+      <div style={{ padding:"16px" }}>
+        {btab==="overview"&&(
+          <div>
+            <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:18 }}>
+              {[["👍","Votes",fmt(d.overview.totalVotes),`+${d.overview.totalVotesChange}%`,B.pink,d.votes7d],["💰","Revenue",`$${fmt(d.overview.revenue)}`,`+${d.overview.revenueChange}%`,B.green,null],["👁","Reach",fmt(d.overview.totalReach),`+${d.overview.totalReachChange}%`,B.blue,d.reach7d],["👥","Followers",fmt(d.overview.followers),`+${d.overview.followersChange}`,B.purple,d.followers7d]].map(([icon,label,val,change,color,spark])=>(
+                <div key={label} style={{ background:D.card,borderRadius:18,padding:"14px 14px 10px",border:`1.5px solid ${D.border}`,boxShadow:B.shadow,overflow:"hidden" }}>
+                  <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6 }}>
+                    <div><div style={{ fontFamily:FONT,fontSize:11,color:D.textMid,fontWeight:700,marginBottom:3 }}>{label}</div><div style={{ fontFamily:FONT,fontWeight:900,fontSize:22,color:D.text,lineHeight:1 }}>{val}</div></div>
+                    <div style={{ width:32,height:32,borderRadius:10,background:`${color}18`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16 }}>{icon}</div>
+                  </div>
+                  {spark&&<div style={{ marginBottom:4 }}><Sparkline data={spark} color={color} height={26}/></div>}
+                  <div style={{ fontFamily:FONT,fontSize:11,fontWeight:800,color:B.green }}>{change} vs last period</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:14 }}>
+              {[["Brand Safety","✓ All Clear",B.green],["Response Time","Avg 4.2 hrs",B.blue],["Audience Fit","92/100",ac],["Completion","84%",B.orange]].map(([label,val,color])=>(
+                <div key={label} style={{ background:D.card,borderRadius:16,padding:"14px 12px",border:`1.5px solid ${color}33` }}>
+                  <div style={{ fontFamily:FONT,fontSize:10,color:D.textMid,fontWeight:700,marginBottom:4,letterSpacing:0.5 }}>{label.toUpperCase()}</div>
+                  <div style={{ fontFamily:FONT,fontWeight:900,fontSize:20,color }}>{val}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ background:D.card,borderRadius:18,padding:"16px 14px",border:`1.5px solid ${D.border}`,boxShadow:B.shadow }}>
+              <h3 style={{ fontFamily:FONT,fontWeight:800,fontSize:15,color:D.text,marginBottom:12,marginTop:0 }}>Votes Over Time</h3>
+              <Sparkline data={d.votes7d} color={ac} height={80}/>
+              <div style={{ display:"flex",justifyContent:"space-between",marginTop:6 }}>{["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(l=><span key={l} style={{ fontFamily:FONT,fontSize:9,color:D.textMid }}>{l}</span>)}</div>
+            </div>
+          </div>
+        )}
+
+        {btab==="campaigns"&&(
+          <div>
+            <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16 }}>
+              <h3 style={{ fontFamily:FONT,fontWeight:800,fontSize:17,color:D.text,margin:0 }}>Your Campaigns</h3>
+              <button style={{ background:userGrad,border:"none",borderRadius:50,padding:"8px 18px",fontFamily:FONT,fontWeight:800,fontSize:13,color:"#fff",cursor:"pointer" }}>+ New</button>
+            </div>
+            {d.campaigns.map(c=>{
+              const spentPct=c.budget>0?pct(c.spent,c.budget):0;
+              return (
+                <div key={c.id} style={{ background:D.card,borderRadius:18,padding:16,marginBottom:14,border:`1.5px solid ${D.border}`,boxShadow:B.shadow }}>
+                  <div style={{ display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:12 }}>
+                    <div>
+                      <div style={{ fontFamily:FONT,fontWeight:800,fontSize:15,color:D.text,marginBottom:4 }}>{c.name}</div>
+                      <div style={{ fontFamily:FONT,fontSize:12,color:D.textMid }}>{c.start} — {c.end}</div>
+                    </div>
+                    <StatusBadge status={c.status}/>
+                  </div>
+                  <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:12 }}>
+                    {[["Votes",fmt(c.votes||0)],["Budget",`$${c.budget}`],["CTR",`${c.ctr}%`]].map(([label,val])=>(
+                      <div key={label} style={{ textAlign:"center",background:D.surface,borderRadius:10,padding:"8px 4px" }}>
+                        <div style={{ fontFamily:FONT,fontWeight:900,fontSize:16,color:D.text }}>{val}</div>
+                        <div style={{ fontFamily:FONT,fontSize:10,color:D.textMid }}>{label}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {c.budget>0&&(<>
+                    <div style={{ display:"flex",justifyContent:"space-between",marginBottom:4 }}>
+                      <span style={{ fontFamily:FONT,fontSize:11,color:D.textMid }}>Budget spent</span>
+                      <span style={{ fontFamily:FONT,fontSize:11,fontWeight:700,color:D.text }}>${c.spent} / ${c.budget}</span>
+                    </div>
+                    <div style={{ height:6,background:D.border,borderRadius:3,marginBottom:12 }}>
+                      <div style={{ height:"100%",width:`${spentPct}%`,background:spentPct>90?B.red:spentPct>70?B.orange:ac,borderRadius:3,transition:"width .5s" }}/>
+                    </div>
+                  </>)}
+                  <div style={{ display:"flex",gap:8 }}>
+                    <button style={{ flex:1,padding:"9px 0",borderRadius:10,border:`1.5px solid ${D.border}`,background:D.surface,fontFamily:FONT,fontWeight:700,fontSize:12,color:D.text,cursor:"pointer" }}>📊 Report</button>
+                    {c.status==="draft"&&<button style={{ flex:1,padding:"9px 0",borderRadius:10,background:userGrad,border:"none",fontFamily:FONT,fontWeight:700,fontSize:12,color:"#fff",cursor:"pointer" }}>🚀 Launch</button>}
+                    {c.status==="active"&&<button style={{ flex:1,padding:"9px 0",borderRadius:10,border:`1.5px solid ${B.red}44`,background:`${B.red}10`,fontFamily:FONT,fontWeight:700,fontSize:12,color:B.red,cursor:"pointer" }}>⏸ Pause</button>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {btab==="audience"&&(
+          <div>
+            <div style={{ background:D.card,borderRadius:18,padding:"16px 14px",border:`1.5px solid ${D.border}`,boxShadow:B.shadow,marginBottom:14 }}>
+              <h3 style={{ fontFamily:FONT,fontWeight:800,fontSize:15,color:D.text,marginBottom:14,marginTop:0 }}>Gender Split</h3>
+              <div style={{ display:"flex",alignItems:"center",gap:16 }}>
+                <DonutChart data={d.audience.gender} size={110}/>
+                <div style={{ flex:1 }}>{d.audience.gender.map(g=><div key={g.label} style={{ display:"flex",alignItems:"center",gap:8,marginBottom:10 }}><div style={{ width:11,height:11,borderRadius:"50%",background:g.color,flexShrink:0 }}/><span style={{ fontFamily:FONT,fontSize:13,color:D.text,fontWeight:600,flex:1 }}>{g.label}</span><span style={{ fontFamily:FONT,fontSize:14,fontWeight:800,color:D.text }}>{g.value}%</span></div>)}</div>
+              </div>
+            </div>
+            <div style={{ background:D.card,borderRadius:18,padding:"16px 14px",border:`1.5px solid ${D.border}`,boxShadow:B.shadow,marginBottom:14 }}>
+              <h3 style={{ fontFamily:FONT,fontWeight:800,fontSize:15,color:D.text,marginBottom:12,marginTop:0 }}>Age Distribution</h3>
+              {d.audience.age.map(a=><div key={a.label} style={{ display:"flex",alignItems:"center",gap:10,marginBottom:10 }}><div style={{ fontFamily:FONT,fontSize:11,fontWeight:700,color:D.textMid,width:36 }}>{a.label}</div><div style={{ flex:1,height:9,background:D.surface,borderRadius:4,overflow:"hidden" }}><div style={{ height:"100%",width:`${a.value}%`,background:a.color,borderRadius:4 }}/></div><div style={{ fontFamily:FONT,fontSize:12,fontWeight:800,color:D.text,width:28 }}>{a.value}%</div></div>)}
+            </div>
+            <div style={{ background:D.card,borderRadius:18,padding:"16px 14px",border:`1.5px solid ${D.border}`,boxShadow:B.shadow }}>
+              <h3 style={{ fontFamily:FONT,fontWeight:800,fontSize:15,color:D.text,marginBottom:12,marginTop:0 }}>Best Time to Post</h3>
+              <p style={{ fontFamily:FONT,fontSize:11,color:D.textMid,fontWeight:600,marginBottom:8,marginTop:0 }}>BY HOUR</p>
+              <BarChart data={d.audience.peakHours} height={80}/>
+              <div style={{ marginTop:12,background:`${B.green}15`,borderRadius:12,padding:"10px 14px",display:"flex",gap:10,alignItems:"center" }}>
+                <span style={{ fontSize:18 }}>💡</span>
+                <span style={{ fontFamily:FONT,fontSize:13,color:D.text,fontWeight:600 }}>Post on <strong>Saturday at 6–9 PM</strong> for peak reach</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {btab==="insights"&&(
+          <div>
+            <div style={{ background:B.gradB,borderRadius:20,padding:"20px 18px",marginBottom:16 }}>
+              <h3 style={{ fontFamily:FONT,fontWeight:900,fontSize:16,color:"#fff",marginBottom:8,marginTop:0 }}>📊 vs Industry Benchmarks</h3>
+              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:10 }}>
+                {[["Industry Avg ER","4.2%"],["Your ER","7.8%"],["Avg Completion","68%"],["Your Completion","84%"]].map(([l,v],i)=>(
+                  <div key={l} style={{ background:"rgba(255,255,255,0.1)",borderRadius:12,padding:"10px 12px" }}>
+                    <div style={{ fontFamily:FONT,fontSize:10,color:"rgba(255,255,255,0.6)",marginBottom:2 }}>{l}</div>
+                    <div style={{ fontFamily:FONT,fontWeight:900,fontSize:20,color:i%2===1?"#00FF87":"rgba(255,255,255,0.65)" }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {d.insights.map((ins,i)=>(
+              <div key={i} style={{ background:D.card,borderRadius:16,padding:"14px 16px",border:`1.5px solid ${ins.color}28`,boxShadow:B.shadow,marginBottom:12,borderLeft:`4px solid ${ins.color}` }}>
+                <div style={{ display:"flex",alignItems:"flex-start",gap:12 }}>
+                  <div style={{ width:38,height:38,borderRadius:10,background:`${ins.color}18`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0 }}>{ins.icon}</div>
+                  <div style={{ flex:1 }}><h4 style={{ fontFamily:FONT,fontWeight:800,fontSize:14,color:D.text,marginBottom:4,marginTop:0 }}>{ins.title}</h4><p style={{ fontFamily:FONT,fontSize:13,color:D.textMid,lineHeight:1.5,margin:0 }}>{ins.body}</p></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MAIN APP
+// ═══════════════════════════════════════════════════════════════════════════════
+function AppInner() {
+  const { D, mode } = useTheme();
+  const toast = useToast();
+  const [screen,setScreen]=useState("splash");
+  const [authType,setAuthType]=useState(null);
+  const [user,setUser]=useState(USERS.me);
+  const [tab,setTab]=useState("feed");
+  const [feedTab,setFeedTab]=useState("foryou");
+  const [posts,setPosts]=useState(INIT_POSTS);
+  const [isFirstOpen,setIsFirstOpen]=useState(getFirstOpen); // Fix #4: persisted
+  const [isLoading,setIsLoading]=useState(true);             // Fix #3: actually used
+  const [isRefreshing,setIsRefreshing]=useState(false);
+  const [fullIdx,setFullIdx]=useState(null);
+  const [showFormat,setShowFormat]=useState(false);
+  const [createFmt,setCreateFmt]=useState(null);
+  const [sharePost,setSharePost]=useState(null);
+  const [notifs,setNotifs]=useState(INITIAL_NOTIFS); // Fix #1: static, not inside component
+  const [search,setSearch]=useState("");
+  const [searchCat,setSearchCat]=useState("All");
+  const [savedIds,setSavedIds]=useState([]);
+  const [remindIds,setRemindIds]=useState([]);
+  const touchStartY=useRef(null);
+  const feedRef=useRef(null);
+  const postsRef=useRef(posts); // Fix #6: stable ref
+  useEffect(()=>{ postsRef.current=posts; },[posts]);
+
+  // Fix #3: actually trigger loading
+  useEffect(()=>{ const t=setTimeout(()=>setIsLoading(false),1200); return()=>clearTimeout(t); },[]);
+
+  const unread    = useMemo(()=>notifs.filter(n=>n.unread).length,[notifs]);
+  const msgUnread = useMemo(()=>notifs.filter(n=>n.type==="comment"&&n.unread).length,[notifs]);
+
+  // Fix #2: only notify if it's the user's own post being voted on
+  const handleVote=useCallback((id,i,isMyPost)=>{
+    setPosts(ps=>ps.map(p=>p.id===id?{...p,votes:p.votes.map((v,j)=>j===i?v+1:v),userVote:i}:p));
+    if(isMyPost){
+      setNotifs(ns=>[{id:uid(),icon:"👍",title:"Someone voted on your poll!",body:"Results are updating in real-time",time:"Just now",unread:true,type:"vote"},...ns]);
+    }
+  },[]);
+
+  // Fix #6: stable handleExpand using ref
+  const handleExpand=useCallback((p,viewMode="immersive")=>{
+    const i=postsRef.current.findIndex(x=>x.id===p.id);
+    setFullIdx(i>=0?i:0);
+  },[]);
+
+  const handlePublish=useCallback((p)=>{
+    setPosts(ps=>[p,...ps]);
+    setCreateFmt(null);
+    setTab("feed");
+    if(isFirstOpen){ setIsFirstOpen(false); markFirstOpen(); } // Fix #4
+    setNotifs(ns=>[{id:uid(),icon:"🎉",title:"Poll published!",body:`"${p.question.slice(0,40)}…"`,time:"Just now",unread:true,type:"milestone"},...ns]);
+    toast("Poll is live! 🎉");
+  },[isFirstOpen]);
+
+  const handleEditBrand=useCallback((color)=>setUser(u=>({...u,brandColor:color})),[]);
+  const handleSave=useCallback((id)=>setSavedIds(ids=>ids.includes(id)?ids.filter(x=>x!==id):[...ids,id]),[]);
+  const handleRemind=useCallback((id)=>setRemindIds(ids=>ids.includes(id)?ids.filter(x=>x!==id):[...ids,id]),[]);
+
+  // Pull to refresh
+  const onTouchStart=e=>{ touchStartY.current=e.touches[0].clientY; };
+  const onTouchEnd=e=>{
+    if(!touchStartY.current||feedRef.current?.scrollTop>0)return;
+    const diff=e.changedTouches[0].clientY-touchStartY.current;
+    if(diff>80&&!isRefreshing){ setIsRefreshing(true); setTimeout(()=>{ setIsRefreshing(false); toast("Feed refreshed ✓"); },1400); }
+    touchStartY.current=null;
+  };
+
+  // Fix #9: distinct Following content
+  const followingIds=useMemo(()=>Object.keys(USERS).filter(id=>id!=="me"),[]);
+  const feedPosts=useMemo(()=>{
+    if(feedTab==="following") return posts.filter(p=>followingIds.includes(p.authorId));
+    if(feedTab==="trending")  return [...posts].sort((a,b)=>b.votes.reduce((x,y)=>x+y,0)-a.votes.reduce((x,y)=>x+y,0));
+    return posts;
+  },[feedTab,posts,followingIds]);
+
+  const filteredPosts=useMemo(()=>posts.filter(p=>{
+    const q=!search||p.question.toLowerCase().includes(search.toLowerCase())||p.tags.some(t=>t.includes(search.toLowerCase()));
+    const c=searchCat==="All"||p.tags.some(t=>t.toLowerCase().includes(searchCat.toLowerCase()));
+    return q&&c;
+  }),[posts,search,searchCat]);
+
+  if(screen==="splash") return <Splash onDone={type=>{if(type==="guest")setScreen("app");else{setAuthType(type);setScreen("auth");}}}/>;
+  if(screen==="auth")   return <Onboarding type={authType} onDone={u=>{setUser(prev=>({...prev,...u}));setScreen("app");}}/>;
+
+  // Fix #24: Messages moved into bottom nav, replacing the less-used top-bar position
+  const navItems=[
+    {id:"feed",     NavIcon:Ic.Home,   label:"Feed"   },
+    {id:"search",   NavIcon:Ic.Search, label:"Search" },
+    {id:"create",   NavIcon:null,      label:"Create" },
+    {id:"gamify",   NavIcon:Ic.Trophy, label:"Levels" },
+    {id:"profile",  NavIcon:Ic.User,   label:"Profile"},
+  ];
+
+  return (
+    <div style={{ background:D.bg,minHeight:"100vh",maxWidth:480,margin:"0 auto",position:"relative",fontFamily:FONT }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap');
+        *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+        ::-webkit-scrollbar{width:0;}
+        input,textarea,button{font-family:'Nunito',sans-serif;}
+        input::placeholder,textarea::placeholder{color:#aaa;}
+        @keyframes pulseDot{0%,100%{opacity:1;}50%{opacity:0.3;}}
+        @keyframes shimmer{0%{background-position:-400% 0;}100%{background-position:400% 0;}}
+        @keyframes trendPulse{0%,100%{box-shadow:0 0 0 0 rgba(232,64,122,0.4);}50%{box-shadow:0 0 0 8px rgba(232,64,122,0);}}
+        @keyframes toastIn{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:translateY(0);}}
+        @keyframes xpBurst{0%{opacity:0;transform:translateX(-50%) scale(0.7);}40%{opacity:1;transform:translateX(-50%) scale(1.08);}70%{transform:translateX(-50%) scale(0.97);}100%{opacity:1;transform:translateX(-50%) scale(1);}}
+      `}</style>
+
+      {/* TOP BAR — XPBadge + Messages + Notifications + Analytics */}
+      <header style={{ position:"sticky",top:0,zIndex:100,background:D.card,borderBottom:`1px solid ${D.border}`,padding:"10px 14px",display:"flex",alignItems:"center",justifyContent:"space-between" }}>
+        <Logo size={28}/>
+        <div style={{ display:"flex",alignItems:"center",gap:8 }}>
+          <XPBadge onClick={()=>setTab("gamify")}/>
+          <button onClick={()=>setTab("analytics")} aria-label="Analytics" style={{ background:"none",border:"none",cursor:"pointer",color:tab==="analytics"?user.brandColor||B.pink:D.textGray,padding:4 }}><Ic.Chart/></button>
+          <button onClick={()=>setTab("messages")} aria-label={`Messages${msgUnread>0?`, ${msgUnread} unread`:""}`} style={{ background:"none",border:"none",cursor:"pointer",color:tab==="messages"?user.brandColor||B.pink:D.textGray,padding:4,position:"relative" }}>
+            <Ic.Msg/>
+            {msgUnread>0&&<div style={{ position:"absolute",top:0,right:0,width:16,height:16,background:B.pink,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",border:`2px solid ${D.card}` }}><span style={{ fontFamily:FONT,fontWeight:900,fontSize:8,color:"#fff" }}>{msgUnread}</span></div>}
+          </button>
+          <button onClick={()=>setTab("notifs")} aria-label={`Notifications, ${unread} unread`} style={{ background:"none",border:"none",cursor:"pointer",position:"relative",padding:4,color:tab==="notifs"?user.brandColor||B.pink:D.textGray }}>
+            <Ic.Bell/>
+            {unread>0&&<div style={{ position:"absolute",top:0,right:0,width:17,height:17,background:B.pink,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",border:`2px solid ${D.card}` }}><span style={{ fontFamily:FONT,fontWeight:900,fontSize:9,color:"#fff" }}>{unread}</span></div>}
+          </button>
+          <button onClick={()=>setTab("profile")} aria-label={`${user.name}'s profile`} style={{ width:34,height:34,borderRadius:"50%",background:user.brandColor||B.grad,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:FONT,fontWeight:900,fontSize:14,color:"#fff",border:`2px solid ${D.card}`,boxShadow:B.shadow,cursor:"pointer",flexShrink:0 }}>
+            {user.avatar||user.name?.[0]||"?"}
+          </button>
+        </div>
+      </header>
+
+      <main style={{ paddingBottom:88 }} ref={feedRef} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+        {isRefreshing&&<div style={{ textAlign:"center",padding:"12px 0",background:D.card,borderBottom:`1px solid ${D.border}` }}><span style={{ fontFamily:FONT,fontSize:13,color:user.brandColor||B.pink,fontWeight:700 }}>↻ Refreshing…</span></div>}
+
+        {tab==="feed"&&(
+          <div>
+            <nav style={{ background:D.card,borderBottom:`1px solid ${D.border}`,display:"flex",padding:"0 16px" }}>
+              {[["foryou","For You"],["following","Following"],["trending","🔥 Trending"]].map(([id,label])=>(
+                <button key={id} onClick={()=>setFeedTab(id)} role="tab" aria-selected={feedTab===id} style={{ padding:"12px 16px",border:"none",borderBottom:`2.5px solid ${feedTab===id?user.brandColor||B.pink:"transparent"}`,background:"transparent",fontFamily:FONT,fontWeight:feedTab===id?800:600,fontSize:13,color:feedTab===id?user.brandColor||B.pink:D.textMid,cursor:"pointer",whiteSpace:"nowrap" }}>{label}</button>
+              ))}
+            </nav>
+
+            {/* Stories — Fix #22: uses live posts state */}
+            <div style={{ background:D.card,borderBottom:`1px solid ${D.border}`,padding:"12px 16px" }}>
+              <div style={{ display:"flex",gap:14,overflowX:"auto",scrollbarWidth:"none" }}>
+                {[{authorId:"me",label:"Your Poll",isMe:true},...posts.slice(0,5).map(p=>({authorId:p.authorId,label:USERS[p.authorId]?.name?.split(" ")[0]||"User"}))].map((s,i)=>{
+                  const a=USERS[s.authorId]||USERS.me;
+                  return (
+                    <button key={i} onClick={s.isMe?()=>setShowFormat(true):()=>handleExpand(posts.find(p=>p.authorId===s.authorId)||posts[0])} style={{ display:"flex",flexDirection:"column",alignItems:"center",gap:5,flexShrink:0,cursor:"pointer",background:"none",border:"none",padding:0 }}>
+                      <div style={{ width:52,height:52,borderRadius:"50%",background:s.isMe?D.surface:a.brandColor||B.grad,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:FONT,fontWeight:900,fontSize:s.isMe?24:17,color:s.isMe?user.brandColor||B.pink:"#fff",border:`2.5px solid ${s.isMe?user.brandColor||B.pink:a.brandColor||B.orange}`,boxShadow:B.shadow }}>{s.isMe?"+":a.avatar}</div>
+                      <span style={{ fontFamily:FONT,fontSize:10,fontWeight:600,color:D.textMid,maxWidth:52,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{s.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Fix #3: isLoading now properly wired, Fix #7/9: Welcome & Following empty states */}
+            {isLoading ? (
+              <div aria-busy="true">{[1,2,3].map(i=><PostSkeleton key={i}/>)}</div>
+            ) : isFirstOpen&&feedTab==="foryou" ? (
+              <WelcomeScreen user={user} onStart={()=>{setIsFirstOpen(false);markFirstOpen();}}/>
+            ) : feedTab==="following"&&feedPosts.length===0 ? (
+              <div style={{ textAlign:"center",padding:"60px 24px" }}>
+                <div style={{ fontSize:48,marginBottom:16 }}>👥</div>
+                <h3 style={{ fontFamily:FONT,fontWeight:800,fontSize:18,color:D.text,marginBottom:8,marginTop:0 }}>Follow more creators</h3>
+                <p style={{ fontFamily:FONT,fontSize:14,color:D.textMid,marginBottom:20,marginTop:0 }}>Tap Follow on accounts you like to see their polls here</p>
+                <button onClick={()=>setTab("search")} style={{ padding:"12px 28px",borderRadius:50,background:user.brandColor?grad(user.brandColor,B.orange):B.grad,border:"none",fontFamily:FONT,fontWeight:800,fontSize:14,color:"#fff",cursor:"pointer" }}>Discover People →</button>
+              </div>
+            ) : (
+              feedPosts.map(p=><PostCard key={p.id} post={p} user={user} onVote={handleVote} onExpand={handleExpand} onShare={setSharePost} onSave={handleSave} onRemind={handleRemind} savedIds={savedIds} remindIds={remindIds}/>)
+            )}
+          </div>
+        )}
+
+        {tab==="search"&&(
+          <div>
+            <div style={{ padding:"14px 16px",position:"sticky",top:56,background:D.card,zIndex:9,borderBottom:`1px solid ${D.border}` }}>
+              <div style={{ position:"relative",marginBottom:10 }}>
+                <span style={{ position:"absolute",left:14,top:"50%",transform:"translateY(-50%)",color:D.textGray }}><Ic.Search/></span>
+                <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search polls, brands, tags…" style={{ width:"100%",padding:"11px 14px 11px 44px",border:`1.5px solid ${D.border}`,borderRadius:50,fontFamily:FONT,fontSize:14,color:D.text,outline:"none",background:D.surface,boxSizing:"border-box" }}/>
+              </div>
+              <div style={{ display:"flex",gap:8,overflowX:"auto",scrollbarWidth:"none" }}>
+                {SEARCH_CATS.map(c=><button key={c} onClick={()=>setSearchCat(c)} style={{ flexShrink:0,padding:"7px 16px",borderRadius:50,border:`1.5px solid ${searchCat===c?user.brandColor||B.pink:D.border}`,background:searchCat===c?`${user.brandColor||B.pink}15`:D.card,fontFamily:FONT,fontWeight:700,fontSize:12,color:searchCat===c?user.brandColor||B.pink:D.textMid,cursor:"pointer" }}>{c}</button>)}
+              </div>
+            </div>
+            {!search&&searchCat==="All"&&(
+              <section style={{ padding:"16px" }}>
+                <h2 style={{ fontFamily:FONT,fontWeight:800,fontSize:16,color:D.text,marginBottom:14,marginTop:0 }}>🔥 Trending Now</h2>
+                {ANALYTICS.hashtags.map((h,i)=>(
+                  <button key={h.tag} onClick={()=>setSearch(h.tag)} style={{ display:"flex",alignItems:"center",padding:"13px 0",background:"none",border:"none",borderBottom:`1px solid ${D.border}`,cursor:"pointer",textAlign:"left",width:"100%" }}>
+                    <div style={{ width:34,height:34,borderRadius:10,background:`${user.brandColor||B.pink}18`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:FONT,fontWeight:900,fontSize:12,color:user.brandColor||B.pink,marginRight:14,flexShrink:0 }}>#{i+1}</div>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontFamily:FONT,fontWeight:800,fontSize:15,color:D.text }}>{h.tag}</div>
+                      <div style={{ fontFamily:FONT,fontSize:12,color:D.textMid }}>{fmt(h.votes)} votes · <span style={{ color:B.green }}>{h.growth}</span></div>
+                    </div>
+                    <span style={{ fontSize:18,color:D.textGray }}>›</span>
+                  </button>
+                ))}
+                <h2 style={{ fontFamily:FONT,fontWeight:800,fontSize:16,color:D.text,margin:"24px 0 14px" }}>👥 Suggested Accounts</h2>
+                {SUGGESTED.map(u=>(
+                  <div key={u.id} style={{ display:"flex",alignItems:"center",gap:12,padding:"12px 0",borderBottom:`1px solid ${D.border}` }}>
+                    <div style={{ width:44,height:44,borderRadius:"50%",background:u.brandColor,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:FONT,fontWeight:900,fontSize:16,color:"#fff",flexShrink:0 }}>{u.avatar}</div>
+                    <div style={{ flex:1 }}><div style={{ fontFamily:FONT,fontWeight:800,fontSize:14,color:D.text }}>{u.name} {u.verified&&<span style={{ color:u.brandColor,fontSize:12 }}>✓</span>}</div><div style={{ fontFamily:FONT,fontSize:12,color:D.textMid }}>{fmt(u.followers)} followers</div></div>
+                    <button onClick={()=>toast(`Following ${u.name}! 👋`)} style={{ padding:"8px 18px",borderRadius:50,background:u.brandColor,border:"none",fontFamily:FONT,fontWeight:800,fontSize:12,color:"#fff",cursor:"pointer" }}>Follow</button>
+                  </div>
+                ))}
+              </section>
+            )}
+            {(search||searchCat!=="All")&&(
+              <div>
+                {filteredPosts.length===0&&<div style={{ textAlign:"center",padding:"50px 20px" }}><p style={{ fontFamily:FONT,color:D.textMid }}>No results for "{search}"</p></div>}
+                {filteredPosts.map(p=>{
+                  const a=USERS[p.authorId]||USERS.me;
+                  return (
+                    <div key={p.id} onClick={()=>handleExpand(p)} style={{ display:"flex",gap:12,padding:"14px 16px",borderBottom:`1px solid ${D.border}`,cursor:"pointer",background:D.card }} role="button" tabIndex={0}>
+                      {/* Fix #27: colored bg for text posts in search */}
+                      <div style={{ width:58,height:58,borderRadius:12,overflow:"hidden",flexShrink:0,background:p.bg||D.surface,display:"flex",alignItems:"center",justifyContent:"center" }}>
+                        {p.images?.[0]?<img src={p.images[0]} alt="" loading="lazy" style={{ width:"100%",height:"100%",objectFit:"cover" }}/>:<span style={{ fontFamily:FONT,fontSize:9,fontWeight:700,color:p.textColor||D.textMid,textAlign:"center",padding:4 }}>{p.question.slice(0,20)}…</span>}
+                      </div>
+                      <div style={{ flex:1,minWidth:0 }}>
+                        <div style={{ fontFamily:FONT,fontWeight:700,fontSize:14,color:D.text,marginBottom:4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{p.question}</div>
+                        <div style={{ fontFamily:FONT,fontSize:12,color:a.brandColor||B.pink,marginBottom:2 }}>{a.name} {a.verified&&"✓"}</div>
+                        <div style={{ fontFamily:FONT,fontSize:12,color:D.textMid }}>{fmt(p.votes.reduce((a,b)=>a+(b||0),0))} votes · {fmt(p.views)} views</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {tab==="analytics"&&<div style={{ padding:"16px 16px 0" }}><h1 style={{ fontFamily:FONT,fontWeight:900,fontSize:20,color:D.text,marginBottom:16,marginTop:0 }}>Analytics</h1><AnalyticsPage user={user} posts={posts}/></div>}
+        {tab==="messages"&&<MessagesPage/>}
+        {tab==="gamify"&&<GamificationPage/>}
+        {tab==="business"&&user.accountType==="business"&&<BusinessDashboard user={user}/>}
+        {tab==="notifs"&&(
+          <div>
+            <div style={{ padding:"16px 18px 10px",display:"flex",alignItems:"center",justifyContent:"space-between" }}>
+              <h1 style={{ fontFamily:FONT,fontWeight:900,fontSize:20,color:D.text,margin:0 }}>Activity</h1>
+              <button onClick={()=>setNotifs(ns=>ns.map(n=>({...n,unread:false})))} style={{ background:"none",border:"none",fontFamily:FONT,fontSize:13,color:user.brandColor||B.pink,fontWeight:700,cursor:"pointer" }}>Mark all read</button>
+            </div>
+            {notifs.map(n=>(
+              <div key={n.id} style={{ display:"flex",gap:13,padding:"14px 18px",borderBottom:`1px solid ${D.border}`,background:n.unread?`${B.pink}08`:D.card }}>
+                <div style={{ width:44,height:44,borderRadius:"50%",background:user.brandColor?grad(user.brandColor,B.orange):B.grad,display:"flex",alignItems:"center",justifyContent:"center",fontSize:19,flexShrink:0 }}>{n.icon}</div>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontFamily:FONT,fontWeight:700,fontSize:14,color:D.text }}>{n.title}</div>
+                  {n.body&&<div style={{ fontFamily:FONT,fontSize:13,color:D.textMid,marginTop:2 }}>{n.body}</div>}
+                  {/* Fix #26: timestamps use textMid not midGray */}
+                  <div style={{ fontFamily:FONT,fontSize:11,color:D.textMid,marginTop:4 }}>{n.time}</div>
+                </div>
+                {n.unread&&<div style={{ width:9,height:9,borderRadius:"50%",background:user.brandColor||B.pink,flexShrink:0,marginTop:6 }}/>}
+              </div>
+            ))}
+          </div>
+        )}
+        {tab==="profile"&&<ProfilePage user={user} posts={posts} onEditBrand={handleEditBrand} onNavigate={setTab}/>}
+      </main>
+
+      {/* BOTTOM NAV — Fix #24: Messages in nav, not top bar */}
+      <nav style={{ position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,background:D.card,borderTop:`1px solid ${D.border}`,display:"flex",padding:"8px 0 22px",zIndex:200 }}>
+        {navItems.map(({id,NavIcon,label})=>{
+          const isPlus=id==="create";
+          const active=tab===id;
+          return (
+            <button key={id} onClick={()=>isPlus?setShowFormat(true):setTab(id)} aria-label={isPlus?"Create new poll":label} aria-current={active?"page":undefined}
+              style={{ flex:1,background:"none",border:"none",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:2,padding:"4px 0",position:"relative" }}>
+              {isPlus
+                ?<div style={{ width:50,height:50,borderRadius:"50%",background:user.brandColor?grad(user.brandColor,B.orange):B.grad,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:`0 4px 18px ${user.brandColor||B.pink}55`,fontSize:26,color:"#fff",marginTop:-22,border:`3px solid ${D.card}` }}>+</div>
+                :<>
+                  <span style={{ color:active?user.brandColor||B.pink:D.textGray }}><NavIcon/></span>
+                  <span style={{ fontFamily:FONT,fontSize:10,fontWeight:active?800:600,color:active?user.brandColor||B.pink:D.textGray }}>{label}</span>
+                  {active&&<div style={{ width:18,height:3,background:user.brandColor?grad(user.brandColor,B.orange):B.grad,borderRadius:2 }}/>}
+                </>
+              }
+            </button>
+          );
+        })}
+      </nav>
+
+      {fullIdx!==null&&<FullScreen posts={posts} startIdx={fullIdx} onClose={()=>setFullIdx(null)} onVote={handleVote}/>}
+      {showFormat&&<FormatPicker onSelect={f=>{setShowFormat(false);setCreateFmt(f);}} onClose={()=>setShowFormat(false)}/>}
+      {createFmt&&<CreatePost format={createFmt} user={user} onPublish={handlePublish} onClose={()=>setCreateFmt(null)}/>}
+      {sharePost&&<ShareSheet post={sharePost} onClose={()=>setSharePost(null)}/>}
+    </div>
+  );
+}
+
+export default function App() {
+  return (
+    <ThemeProvider>
+      <TickProvider>
+        <ToastProvider>
+          <XPProvider>
+            <AppInner/>
+          </XPProvider>
+        </ToastProvider>
+      </TickProvider>
+    </ThemeProvider>
+  );
+}

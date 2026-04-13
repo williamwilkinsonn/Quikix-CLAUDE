@@ -33,44 +33,7 @@ cd Quikix-CLAUDE
 npm install
 ```
 
-### 2. Set up Firebase
-
-#### a) Create a Firebase project
-
-1. Go to [Firebase Console](https://console.firebase.google.com)
-2. Click **Add project** and follow the wizard
-3. Enable **Authentication** → Sign-in method → **Email/Password**
-4. Enable **Firestore Database** → Start in test mode (lock it down later)
-
-#### b) Get your Web App credentials
-
-1. In Firebase Console → **Project Settings** (⚙️ icon)
-2. Scroll down to **Your apps** → click **</>** (Web app)
-3. Register the app and copy the `firebaseConfig` object
-
-#### c) Configure environment variables
-
-```bash
-cp .env.example .env
-```
-
-Open `.env` and fill in your Firebase credentials:
-
-```env
-FIREBASE_API_KEY=AIzaSy...
-FIREBASE_AUTH_DOMAIN=your-project.firebaseapp.com
-FIREBASE_PROJECT_ID=your-project-id
-FIREBASE_STORAGE_BUCKET=your-project.appspot.com
-FIREBASE_MESSAGING_SENDER_ID=1234567890
-FIREBASE_APP_ID=1:1234567890:web:abc123
-FIREBASE_MEASUREMENT_ID=G-XXXXXXXXXX
-```
-
-> ⚠️ **Never commit your `.env` file.** It's already in `.gitignore`.
-
----
-
-### 3. Run the app
+### 2. Run the app
 
 ```bash
 npx expo start
@@ -79,6 +42,17 @@ npx expo start
 - Press **i** for iOS Simulator
 - Press **a** for Android Emulator
 - Scan the QR code with **Expo Go** on your phone
+
+> **Firebase is pre-configured** — the app connects to the `quikix-app` Firebase project out of the box.
+> No `.env` file is required to get started.
+
+#### Using a different Firebase project
+
+If you want to connect to your own Firebase project:
+
+1. Copy the example env file: `cp .env.example .env`
+2. Replace the values in `.env` with credentials from your Firebase Console
+3. Restart the Metro bundler: `npx expo start --clear`
 
 ---
 

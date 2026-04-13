@@ -1,28 +1,36 @@
 /**
- * Firebase Configuration
+ * Firebase Configuration — Quikix (project: quikix-app)
  *
- * This file initializes Firebase using the Web SDK (for Expo Go / web compatibility).
- * For production native builds, use @react-native-firebase/app instead and provide
- * google-services.json (Android) and GoogleService-Info.plist (iOS).
+ * Credentials are loaded from .env via react-native-dotenv (@env).
+ * Hardcoded project defaults are used as fallbacks so the app works
+ * immediately after cloning without requiring a separate .env file.
  *
- * Setup:
- * 1. Copy .env.example to .env
- * 2. Fill in your Firebase project credentials from Firebase Console
- * 3. Go to: https://console.firebase.google.com > Your Project > Project Settings > Your Apps
+ * Firebase web API keys are designed to be included in client bundles;
+ * security is enforced through Firebase Security Rules.
  */
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, initializeAuth, getReactNativePersistence } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
+import { getAnalytics, isSupported } from 'firebase/analytics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  FIREBASE_API_KEY,
+  FIREBASE_AUTH_DOMAIN,
+  FIREBASE_PROJECT_ID,
+  FIREBASE_STORAGE_BUCKET,
+  FIREBASE_MESSAGING_SENDER_ID,
+  FIREBASE_APP_ID,
+  FIREBASE_MEASUREMENT_ID,
+} from '@env';
 
 const firebaseConfig = {
-  apiKey: process.env.FIREBASE_API_KEY,
-  authDomain: process.env.FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.FIREBASE_PROJECT_ID,
-  storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.FIREBASE_APP_ID,
-  measurementId: process.env.FIREBASE_MEASUREMENT_ID,
+  apiKey: FIREBASE_API_KEY ?? 'AIzaSyDgTeYwIOIauFhzlTg-KVOBnp7gC2zm_uQ',
+  authDomain: FIREBASE_AUTH_DOMAIN ?? 'quikix-app.firebaseapp.com',
+  projectId: FIREBASE_PROJECT_ID ?? 'quikix-app',
+  storageBucket: FIREBASE_STORAGE_BUCKET ?? 'quikix-app.firebasestorage.app',
+  messagingSenderId: FIREBASE_MESSAGING_SENDER_ID ?? '357543823105',
+  appId: FIREBASE_APP_ID ?? '1:357543823105:web:34f6de8e0a38bfc52cfd00',
+  measurementId: FIREBASE_MEASUREMENT_ID ?? 'G-0WJY9XNK27',
 };
 
 // Prevent re-initialization on hot reload
@@ -40,4 +48,12 @@ if (getApps().length === 1) {
 
 const db = getFirestore(app);
 
-export { app, auth, db };
+// Analytics is only supported in browser / standalone environments, not Expo Go
+let analytics: ReturnType<typeof getAnalytics> | null = null;
+isSupported().then((supported) => {
+  if (supported) {
+    analytics = getAnalytics(app);
+  }
+});
+
+export { app, auth, db, analytics };
